@@ -19,6 +19,11 @@ const MENU_2 = [
   { title: "🌏 Бусад орон", url: "https://esim.beez.mn/" },
 ];
 
+const MENU_3 = [
+  { title: "📊 Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
+  { title: "➕ Дата нэмэх", url: "https://esim.beez.mn/check-usage/" },
+];
+
 // --- WEBHOOK VERIFICATION ---
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -44,6 +49,7 @@ app.post("/webhook", async (req, res) => {
         await sendGreeting(senderId);
         await sendButtons(senderId, "✈️ Очих улсаа сонгоно уу:", MENU_1);
         await sendButtons(senderId, "🌏 Бусад:", MENU_2);
+        await sendButtons(senderId, "📱 eSIM удирдах:", MENU_3);
       }
     }
   }
