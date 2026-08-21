@@ -40,13 +40,19 @@ app.post("/webhook", async (req, res) => {
   if (body.object !== "page") return res.sendStatus(404);
 
   for (const entry of body.entry) {
+    const pageId = entry.id;
     for (const event of entry.messaging) {
       const senderId = event.sender.id;
+
+      // Ignore messages sent by the page itself (prevents infinite loop)
+      if (senderId === pageId) continue;
+      // Ignore echo messages
+      if (event.message && event.message.is_echo) continue;
+
       if (event.message || event.postback) {
         await sendGreeting(senderId);
         await sendButtons(senderId, "✈️ Очих улсаа сонгоно уу:", MENU_1);
-        await sendButtons(senderId, "🌏 Бусад:", MENU_2);
-        await sendButtons(senderId, "📱 eSIM удирдах:", MENU_3);
+        await sendButtons(senderId, "🌏 Бусад үйлчилгээ:", MENU_2);
       }
     }
   }
