@@ -17,9 +17,6 @@ const MENU_1 = [
 
 const MENU_2 = [
   { title: "🌏 Бусад орон", url: "https://esim.beez.mn/" },
-];
-
-const MENU_3 = [
   { title: "📊 Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
   { title: "➕ Дата нэмэх", url: "https://esim.beez.mn/check-usage/" },
 ];
