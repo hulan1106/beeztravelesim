@@ -8,9 +8,9 @@ const msg = require("./messenger");
 // and mainland+Japan+Korea bundles are separate products, deliberately not
 // wired to this trigger. Add more destinations here as you extend the flow.
 const DESTINATION_TRIGGERS = {
-  "China mainland": ["china", "хятад", "cn"],
-  "South Korea": ["korea", "солонгос", "kr"],
-  "Japan": ["japan", "япон", "jp"],
+  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
+  "South Korea": ["korea", "солонгос", "kr", "solongos"],
+  "Japan": ["japan", "япон", "jp", "yapon"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
