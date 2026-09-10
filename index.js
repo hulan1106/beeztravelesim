@@ -1,6 +1,11 @@
 const express = require("express");
 const axios = require("axios");
 
+const db = require("./db");
+const esimaccess = require("./esimaccess");
+const msg = require("./messenger");
+const flow = require("./flow");
+
 const app = express();
 app.use(express.json());
 
@@ -21,7 +26,7 @@ const MENU_2 = [
   { title: "➕ Дата нэмэх", url: "https://esim.beez.mn/check-usage/" },
 ];
 
-// --- WEBHOOK VERIFICATION ---
+// --- FACEBOOK WEBHOOK VERIFICATION (unchanged) ---
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -34,7 +39,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// --- RECEIVE MESSAGES ---
+// --- RECEIVE MESSENGER MESSAGES ---
 app.post("/webhook", async (req, res) => {
   const body = req.body;
   if (body.object !== "page") return res.sendStatus(404);
@@ -44,11 +49,24 @@ app.post("/webhook", async (req, res) => {
     for (const event of entry.messaging) {
       const senderId = event.sender.id;
 
-      // Ignore messages sent by the page itself (prevents infinite loop)
       if (senderId === pageId) continue;
-      // Ignore echo messages
       if (event.message && event.message.is_echo) continue;
 
+      const text = event.message?.text || "";
+      const quickReplyPayload = event.message?.quick_reply?.payload || null;
+
+      // NEW: China/Korea/Japan purchase flow (text- or quick-reply-driven)
+      try {
+        const handled = await flow.handleMessage(senderId, text, quickReplyPayload);
+        if (handled) continue;
+      } catch (err) {
+        console.error("flow error:", err.response?.data || err.message);
+        await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
+        continue;
+      }
+
+      // ORIGINAL BEHAVIOR: anything not recognized by the purchase flow falls
+      // back to the default menu, exactly as before.
       if (event.message || event.postback) {
         await sendGreeting(senderId);
         await sendButtons(senderId, "✈️ Очих улсаа сонгоно уу:", MENU_1);
@@ -59,11 +77,71 @@ app.post("/webhook", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
 });
 
+// --- NEW: byl.mn PAYMENT WEBHOOK ---
+// Configure this URL (https://<your-railway-domain>/webhook/byl) as the
+// project webhook in the byl.mn dashboard, subscribed to invoice.paid.
+app.post("/webhook/byl", async (req, res) => {
+  res.status(200).send("OK"); // ack immediately, do the work after
+
+  const event = req.body;
+  if (event.type !== "invoice.paid") return;
+
+  const invoice = event.data?.object;
+  if (!invoice) return;
+
+  const convo = await db.getConversationByInvoiceId(invoice.id);
+  if (!convo) {
+    console.warn("No conversation found for paid invoice", invoice.id);
+    return;
+  }
+
+  const plan = await db.getPlanById(convo.plan_id);
+  if (!plan) {
+    console.error("Plan missing for conversation", convo.sender_id);
+    return;
+  }
+
+  try {
+    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны эсимийг бэлдэж байна...");
+
+    const orderNo = await esimaccess.orderEsim({
+      packageCode: plan.slug,
+      price: plan.price_mnt, // see esimaccess.js note re: currency units
+      transactionId: `beez_${invoice.id}_${Date.now()}`,
+    });
+
+    await db.upsertConversation(convo.sender_id, { state: "PROVISIONING", order_no: orderNo });
+
+    const profile = await esimaccess.queryEsimProfile(orderNo);
+    if (!profile) {
+      await msg.sendText(
+        convo.sender_id,
+        "Эсим бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
+      );
+      return;
+    }
+
+    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
+    await msg.sendText(
+      convo.sender_id,
+      `Эсим бэлэн боллоо! 🎉\nICCID: ${profile.iccid}\nActivation code: ${profile.activationCode}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`
+    );
+    await db.upsertConversation(convo.sender_id, { state: "DONE" });
+  } catch (err) {
+    console.error("eSIM provisioning failed:", err.response?.data || err.message);
+    await msg.sendText(
+      convo.sender_id,
+      "Эсим үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+    );
+  }
+});
+
 async function sendGreeting(recipientId) {
-  await axios.post(GRAPH_URL, {
-    recipient: { id: recipientId },
-    message: { text: "Сайн байна уу? 🌏 Та хаашаа аялах вэ?" },
-  }, { params: { access_token: PAGE_ACCESS_TOKEN } });
+  await axios.post(
+    GRAPH_URL,
+    { recipient: { id: recipientId }, message: { text: "Сайн байна уу? 🌏 Та хаашаа аялах вэ?" } },
+    { params: { access_token: PAGE_ACCESS_TOKEN } }
+  );
 }
 
 async function sendButtons(recipientId, text, items) {
@@ -74,19 +152,14 @@ async function sendButtons(recipientId, text, items) {
     webview_height_ratio: "full",
   }));
 
-  await axios.post(GRAPH_URL, {
-    recipient: { id: recipientId },
-    message: {
-      attachment: {
-        type: "template",
-        payload: {
-          template_type: "button",
-          text: text,
-          buttons: buttons,
-        },
-      },
+  await axios.post(
+    GRAPH_URL,
+    {
+      recipient: { id: recipientId },
+      message: { attachment: { type: "template", payload: { template_type: "button", text, buttons } } },
     },
-  }, { params: { access_token: PAGE_ACCESS_TOKEN } });
+    { params: { access_token: PAGE_ACCESS_TOKEN } }
+  );
 }
 
 const PORT = process.env.PORT || 3000;
