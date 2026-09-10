@@ -10,53 +10,33 @@ function headers() {
   };
 }
 
-// eSIM Access rejects orders that don't use THEIR current wholesale price for
-// the package (error 200005 "the package's price is expired") — your MNT
-// sell price is not accepted here, it's just what you charge the customer.
-// This looks up the live price for one packageCode right before ordering.
-// Price is fixed-point (their docs: divide by 10,000 for USD).
-async function getCurrentPrice(packageCode) {
-  const res = await axios.post(
-    `${BASE}/package/list`,
-    { locationCode: "", type: "", packageCode, iccid: "" },
-    { headers: headers() }
-  );
-  const body = res.data;
-  console.log(`[esimaccess] package/list for ${packageCode}:`, JSON.stringify(body));
-  if (body.errorCode) {
-    throw new Error(`eSIM Access package lookup failed: ${body.errorCode} ${body.errorMsg || ""}`);
-  }
-  const pkg = body.obj?.packageList?.[0];
-  if (!pkg) throw new Error(`eSIM Access: no package found for code ${packageCode}`);
-  return pkg.price; // fixed-point units, pass straight through to orderEsim
-}
-
-// packageCode = the `slug` column from esim_plans. `price` must be the
-// CURRENT value from getCurrentPrice(packageCode), not your MNT sell price —
-// see note above.
+// packageCode = the `slug` column from esim_plans.
+// IMPORTANT: do NOT send a price/amount here. An earlier version of this
+// code sent a price (first your MNT sell price, then a live-fetched price)
+// and eSIM Access rejected both with "200005 the package's price is
+// expired." Your working WordPress/WooCommerce integration on the same
+// eSIM Access account confirms the correct call omits price/amount
+// entirely — eSIM Access charges its own current price automatically.
 async function orderEsim({ packageCode, transactionId }) {
-  const price = await getCurrentPrice(packageCode);
-  console.log(`[esimaccess] ordering ${packageCode} at price ${price}`);
   const res = await axios.post(
     `${BASE}/esim/order`,
     {
       transactionId,
-      amount: price,
-      packageInfoList: [{ packageCode, count: 1, price }],
+      packageInfoList: [{ packageCode, count: 1 }],
     },
     { headers: headers() }
   );
   const body = res.data;
   console.log(`[esimaccess] order response:`, JSON.stringify(body));
   if (body.errorCode) {
-    throw new Error(`eSIM Access order failed: ${body.errorCode} ${body.errorMsg || ""} (tried packageCode=${packageCode}, price=${price})`);
+    throw new Error(`eSIM Access order failed: ${body.errorCode} ${body.errorMsg || ""} (packageCode=${packageCode})`);
   }
   return body.obj?.orderNo || body.orderNo;
 }
 
 // Provisioning can take up to ~30s per eSIM Access, so poll a few times.
-// Field names (qrCodeUrl/qrCode/ac) can vary slightly by account/API version —
-// log `res.data` on your first live run and adjust here if needed.
+// Readiness check and field names (esimStatus, qrCodeUrl, iccid) match your
+// working WordPress plugin on the same account.
 async function queryEsimProfile(orderNo, { retries = 8, delayMs = 5000 } = {}) {
   for (let attempt = 0; attempt < retries; attempt++) {
     const res = await axios.post(
@@ -64,13 +44,13 @@ async function queryEsimProfile(orderNo, { retries = 8, delayMs = 5000 } = {}) {
       { orderNo, pager: { pageNum: 1, pageSize: 5 } },
       { headers: headers() }
     );
+    console.log(`[esimaccess] query response (attempt ${attempt + 1}):`, JSON.stringify(res.data));
     const list = res.data.obj?.esimList || res.data.obj?.list || [];
     const profile = list[0];
-    if (profile && (profile.qrCodeUrl || profile.qrCode)) {
+    if (profile && profile.esimStatus === "GOT_RESOURCE" && profile.qrCodeUrl) {
       return {
         iccid: profile.iccid,
-        qrCodeUrl: profile.qrCodeUrl || profile.qrCode,
-        activationCode: profile.ac || profile.shortUrl,
+        qrCodeUrl: profile.qrCodeUrl,
       };
     }
     await new Promise((r) => setTimeout(r, delayMs));
@@ -78,4 +58,4 @@ async function queryEsimProfile(orderNo, { retries = 8, delayMs = 5000 } = {}) {
   return null; // still provisioning — caller decides what to tell the customer
 }
 
-module.exports = { orderEsim, queryEsimProfile, getCurrentPrice };
+module.exports = { orderEsim, queryEsimProfile };

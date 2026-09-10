@@ -123,7 +123,7 @@ app.post("/webhook/byl", async (req, res) => {
     await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
     await msg.sendText(
       convo.sender_id,
-      `Эсим бэлэн боллоо! 🎉\nICCID: ${profile.iccid}\nActivation code: ${profile.activationCode}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`
+      `Эсим бэлэн боллоо! 🎉\nICCID: ${profile.iccid}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`
     );
     await db.upsertConversation(convo.sender_id, { state: "DONE" });
   } catch (err) {
