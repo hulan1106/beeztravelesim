@@ -22,6 +22,7 @@ async function getCurrentPrice(packageCode) {
     { headers: headers() }
   );
   const body = res.data;
+  console.log(`[esimaccess] package/list for ${packageCode}:`, JSON.stringify(body));
   if (body.errorCode) {
     throw new Error(`eSIM Access package lookup failed: ${body.errorCode} ${body.errorMsg || ""}`);
   }
@@ -35,6 +36,7 @@ async function getCurrentPrice(packageCode) {
 // see note above.
 async function orderEsim({ packageCode, transactionId }) {
   const price = await getCurrentPrice(packageCode);
+  console.log(`[esimaccess] ordering ${packageCode} at price ${price}`);
   const res = await axios.post(
     `${BASE}/esim/order`,
     {
@@ -45,8 +47,9 @@ async function orderEsim({ packageCode, transactionId }) {
     { headers: headers() }
   );
   const body = res.data;
+  console.log(`[esimaccess] order response:`, JSON.stringify(body));
   if (body.errorCode) {
-    throw new Error(`eSIM Access order failed: ${body.errorCode} ${body.errorMsg || ""}`);
+    throw new Error(`eSIM Access order failed: ${body.errorCode} ${body.errorMsg || ""} (tried packageCode=${packageCode}, price=${price})`);
   }
   return body.obj?.orderNo || body.orderNo;
 }
