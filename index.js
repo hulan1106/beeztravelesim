@@ -104,9 +104,13 @@ app.post("/webhook/byl", async (req, res) => {
     }
 
     await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
-    await msg.sendText(
+    await msg.sendButtons(
       convo.sender_id,
-      `Эсим бэлэн боллоо! 🎉\nOrder No (Batch ID): ${orderNo}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`
+      `Эсим бэлэн боллоо! 🎉\nOrder No (Batch ID): ${orderNo}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`,
+      [
+        { title: "Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
+        { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
+      ]
     );
     await db.upsertConversation(convo.sender_id, { state: "DONE" });
   } catch (err) {
