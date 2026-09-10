@@ -111,13 +111,6 @@ async function handleDaysReply(senderId, convo, text) {
 
   const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
 
-  if (matchedDuration !== days) {
-    await msg.sendText(
-      senderId,
-      `${days} хоногийн багц алга тул ${matchedDuration} хоногийн багцыг санал болгож байна:`
-    );
-  }
-
   await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
   await msg.sendQuickReplies(
     senderId,
