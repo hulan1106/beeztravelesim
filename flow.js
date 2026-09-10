@@ -10,13 +10,13 @@ const msg = require("./messenger");
 // (e.g. "USA & Canada", "Australia & New Zealand") — deliberately left out
 // so triggers only match the single-country plans.
 const DESTINATION_TRIGGERS = {
-  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
-  "South Korea": ["korea", "солонгос", "kr", "solongos"],
-  "Japan": ["japan", "япон", "jp", "yapon"],
+  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad", "хятдын есим сонголт харах", "hytadd", "hytd", "Хятдын сим сонголт харах"],
+  "South Korea": ["korea", "солонгос", "kr", "solongos", "Солонгосын сим сонголт харах"],
+  "Japan": ["japan", "япон", "jp", "yapon","Японы сим сонголт харах"],
   "Russia": ["russia", "орос", "ru"],
   "Germany": ["germany", "герман", "de"],
   "United States": ["usa", "america", "америк", "us"],
-  "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
+  "Kazakhstan": ["kazakhstan", "казахстан", "kz", "қазақстан"],
   "Thailand": ["thailand", "тайланд", "th"],
   "Turkey": ["turkey", "turkiye", "турк", "tr"],
   "Vietnam": ["vietnam", "вьетнам", "vn"],
