@@ -6,23 +6,49 @@ const msg = require("./messenger");
 // (must match the xlsx column verbatim). China has multiple listed products —
 // "China mainland" is the plain single-country plan; the mainland+HK+Macao
 // and mainland+Japan+Korea bundles are separate products, deliberately not
-// wired to this trigger. Add more destinations here as you extend the flow.
+// wired to this trigger. Same logic applies to other bundled rows
+// (e.g. "USA & Canada", "Australia & New Zealand") — deliberately left out
+// so triggers only match the single-country plans.
 const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
-    "Russia": ["russia", "орос", "oros"],
-  "America": ["America", "Америк", "US"],
-    "France": ["France", "франц"],
-      "Italy": ["italy", "итали"],
+  "Russia": ["russia", "орос", "ru"],
+  "Germany": ["germany", "герман", "de"],
+  "United States": ["usa", "america", "америк", "us"],
+  "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
+  "Thailand": ["thailand", "тайланд", "th"],
+  "Turkey": ["turkey", "turkiye", "турк", "tr"],
+  "Vietnam": ["vietnam", "вьетнам", "vn"],
+  "Canada": ["canada", "канад", "ca"],
+  "Qatar": ["qatar", "катар", "qa"],
+  "Czech Republic": ["czech", "чех", "cz"],
+  "Australia": ["australia", "австрали", "au"],
+  "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират"],
+  "Georgia": ["georgia", "гүрж", "ge"],
+  "Indonesia": ["indonesia", "индонез", "id"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
-// so "China mainland" can read as "Хятад" to the customer.
+// so DB values can read naturally in Mongolian to the customer.
 const DISPLAY_NAMES = {
   "China mainland": "Хятад",
   "South Korea": "Солонгос",
   "Japan": "Япон",
+  "Russia": "Орос",
+  "Germany": "Герман",
+  "United States": "Америк",
+  "Kazakhstan": "Казахстан",
+  "Thailand": "Тайланд",
+  "Turkey": "Турк",
+  "Vietnam": "Вьетнам",
+  "Canada": "Канад",
+  "Qatar": "Катар",
+  "Czech Republic": "Чех",
+  "Australia": "Австрали",
+  "United Arab Emirates": "АНЭУ",
+  "Georgia": "Гүрж",
+  "Indonesia": "Индонез",
 };
 
 function matchDestination(text) {
