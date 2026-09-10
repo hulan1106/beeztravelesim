@@ -10,13 +10,31 @@ function headers() {
   };
 }
 
-// packageCode = the `slug` column from esim_plans.
-// NOTE on `price`: eSIM Access historically bills in fixed-point units (USD
-// x 10,000) rather than raw MNT. Check your first real order against the
-// balance deducted in console.esimaccess.com — if it doesn't match plan.price_mnt,
-// swap this for the package's actual `price` field from their package-list
-// endpoint instead of your MNT sell price.
-async function orderEsim({ packageCode, price, transactionId }) {
+// eSIM Access rejects orders that don't use THEIR current wholesale price for
+// the package (error 200005 "the package's price is expired") — your MNT
+// sell price is not accepted here, it's just what you charge the customer.
+// This looks up the live price for one packageCode right before ordering.
+// Price is fixed-point (their docs: divide by 10,000 for USD).
+async function getCurrentPrice(packageCode) {
+  const res = await axios.post(
+    `${BASE}/package/list`,
+    { locationCode: "", type: "", packageCode, iccid: "" },
+    { headers: headers() }
+  );
+  const body = res.data;
+  if (body.errorCode) {
+    throw new Error(`eSIM Access package lookup failed: ${body.errorCode} ${body.errorMsg || ""}`);
+  }
+  const pkg = body.obj?.packageList?.[0];
+  if (!pkg) throw new Error(`eSIM Access: no package found for code ${packageCode}`);
+  return pkg.price; // fixed-point units, pass straight through to orderEsim
+}
+
+// packageCode = the `slug` column from esim_plans. `price` must be the
+// CURRENT value from getCurrentPrice(packageCode), not your MNT sell price —
+// see note above.
+async function orderEsim({ packageCode, transactionId }) {
+  const price = await getCurrentPrice(packageCode);
   const res = await axios.post(
     `${BASE}/esim/order`,
     {
@@ -57,4 +75,4 @@ async function queryEsimProfile(orderNo, { retries = 8, delayMs = 5000 } = {}) {
   return null; // still provisioning — caller decides what to tell the customer
 }
 
-module.exports = { orderEsim, queryEsimProfile };
+module.exports = { orderEsim, queryEsimProfile, getCurrentPrice };

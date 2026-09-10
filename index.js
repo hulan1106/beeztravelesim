@@ -106,7 +106,6 @@ app.post("/webhook/byl", async (req, res) => {
 
     const orderNo = await esimaccess.orderEsim({
       packageCode: plan.slug,
-      price: plan.price_mnt, // see esimaccess.js note re: currency units
       transactionId: `beez_${invoice.id}_${Date.now()}`,
     });
 
