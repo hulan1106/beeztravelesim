@@ -14,18 +14,6 @@ const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 
 const GRAPH_URL = "https://graph.facebook.com/v19.0/me/messages";
 
-const MENU_1 = [
-  { title: "🇨🇳 Хятад", url: "https://esim.beez.mn/product/china/" },
-  { title: "🇰🇷 Солонгос", url: "https://esim.beez.mn/product/korea/" },
-  { title: "🇯🇵 Япон", url: "https://esim.beez.mn/product/%d1%8f%d0%bf%d0%be%d0%bd/" },
-];
-
-const MENU_2 = [
-  { title: "🌏 Бусад орон", url: "https://esim.beez.mn/" },
-  { title: "📊 Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
-  { title: "➕ Дата нэмэх", url: "https://esim.beez.mn/check-usage/" },
-];
-
 // --- FACEBOOK WEBHOOK VERIFICATION (unchanged) ---
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -55,7 +43,7 @@ app.post("/webhook", async (req, res) => {
       const text = event.message?.text || "";
       const quickReplyPayload = event.message?.quick_reply?.payload || null;
 
-      // NEW: China/Korea/Japan purchase flow (text- or quick-reply-driven)
+      // China/Korea/Japan purchase flow (text- or quick-reply-driven)
       try {
         const handled = await flow.handleMessage(senderId, text, quickReplyPayload);
         if (handled) continue;
@@ -65,19 +53,14 @@ app.post("/webhook", async (req, res) => {
         continue;
       }
 
-      // ORIGINAL BEHAVIOR: anything not recognized by the purchase flow falls
-      // back to the default menu, exactly as before.
-      if (event.message || event.postback) {
-        await sendGreeting(senderId);
-        await sendButtons(senderId, "✈️ Очих улсаа сонгоно уу:", MENU_1);
-        await sendButtons(senderId, "🌏 Бусад үйлчилгээ:", MENU_2);
-      }
+      // Anything not recognized by the purchase flow is now simply ignored
+      // (fallback menu removed).
     }
   }
   res.status(200).send("EVENT_RECEIVED");
 });
 
-// --- NEW: byl.mn PAYMENT WEBHOOK ---
+// --- byl.mn PAYMENT WEBHOOK ---
 // Configure this URL (https://<your-railway-domain>/webhook/byl) as the
 // project webhook in the byl.mn dashboard, subscribed to invoice.paid.
 app.post("/webhook/byl", async (req, res) => {
@@ -102,7 +85,7 @@ app.post("/webhook/byl", async (req, res) => {
   }
 
   try {
-    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны еСИМийг бэлдэж байна...");
+    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны эсимийг бэлдэж байна...");
 
     const orderNo = await esimaccess.orderEsim({
       packageCode: plan.slug,
@@ -115,51 +98,25 @@ app.post("/webhook/byl", async (req, res) => {
     if (!profile) {
       await msg.sendText(
         convo.sender_id,
-        "еСИМ бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
+        "Эсим бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
       );
       return;
     }
 
-   await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
-await msg.sendText(
-  convo.sender_id,
-  `еСИМ бэлэн боллоо! 🎉\nOrder No (Batch ID): ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`
-);
+    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
+    await msg.sendText(
+      convo.sender_id,
+      `Эсим бэлэн боллоо! 🎉\nOrder No (Batch ID): ${orderNo}\n\nQR кодыг уншуулж, эсимээ идэвхжүүлээрэй.`
+    );
     await db.upsertConversation(convo.sender_id, { state: "DONE" });
   } catch (err) {
     console.error("eSIM provisioning failed:", err.response?.data || err.message);
     await msg.sendText(
       convo.sender_id,
-      "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+      "Эсим үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
     );
   }
 });
-
-async function sendGreeting(recipientId) {
-  await axios.post(
-    GRAPH_URL,
-    { recipient: { id: recipientId }, message: { text: "Сайн байна уу? 🌏 Та хаашаа аялах вэ?" } },
-    { params: { access_token: PAGE_ACCESS_TOKEN } }
-  );
-}
-
-async function sendButtons(recipientId, text, items) {
-  const buttons = items.map((item) => ({
-    type: "web_url",
-    url: item.url,
-    title: item.title,
-    webview_height_ratio: "full",
-  }));
-
-  await axios.post(
-    GRAPH_URL,
-    {
-      recipient: { id: recipientId },
-      message: { attachment: { type: "template", payload: { template_type: "button", text, buttons } } },
-    },
-    { params: { access_token: PAGE_ACCESS_TOKEN } }
-  );
-}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✈️ Beez Travel eSIM bot running on port ${PORT}`));
