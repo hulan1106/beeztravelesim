@@ -11,6 +11,10 @@ const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
+    "Russia": ["russia", "орос", "oros"],
+  "America": ["America", "Америк", "US"],
+    "France": ["France", "франц"],
+      "Italy": ["italy", "итали"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
