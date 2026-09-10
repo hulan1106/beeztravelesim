@@ -85,7 +85,7 @@ app.post("/webhook/byl", async (req, res) => {
   }
 
   try {
-    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны эсимийг бэлдэж байна...");
+    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
 
     const orderNo = await esimaccess.orderEsim({
       packageCode: plan.slug,
@@ -98,7 +98,7 @@ app.post("/webhook/byl", async (req, res) => {
     if (!profile) {
       await msg.sendText(
         convo.sender_id,
-        "Эсим бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
+        "еСИМ бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
       );
       return;
     }
@@ -117,7 +117,7 @@ app.post("/webhook/byl", async (req, res) => {
     console.error("eSIM provisioning failed:", err.response?.data || err.message);
     await msg.sendText(
       convo.sender_id,
-      "Эсим үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+      "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
     );
   }
 });
