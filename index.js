@@ -120,11 +120,11 @@ app.post("/webhook/byl", async (req, res) => {
       return;
     }
 
-    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
-    await msg.sendText(
-      convo.sender_id,
-      `еСИМ бэлэн боллоо! 🎉\nICCID: ${profile.iccid}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`
-    );
+   await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
+await msg.sendText(
+  convo.sender_id,
+  `еСИМ бэлэн боллоо! 🎉\nOrder No (Batch ID): ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`
+);
     await db.upsertConversation(convo.sender_id, { state: "DONE" });
   } catch (err) {
     console.error("eSIM provisioning failed:", err.response?.data || err.message);
