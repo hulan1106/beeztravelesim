@@ -40,10 +40,29 @@ function sendButton(recipientId, text, url, buttonTitle) {
   });
 }
 
+// buttons: [{ title, url }] — supports multiple buttons under one message
+function sendButtons(recipientId, text, buttons) {
+  return send(recipientId, {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "button",
+        text,
+        buttons: buttons.map((b) => ({
+          type: "web_url",
+          url: b.url,
+          title: b.title,
+          webview_height_ratio: "full",
+        })),
+      },
+    },
+  });
+}
+
 function sendImage(recipientId, imageUrl) {
   return send(recipientId, {
     attachment: { type: "image", payload: { url: imageUrl, is_reusable: true } },
   });
 }
 
-module.exports = { sendText, sendQuickReplies, sendButton, sendImage };
+module.exports = { sendText, sendQuickReplies, sendButton, sendButtons, sendImage };
