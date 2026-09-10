@@ -63,17 +63,26 @@ async function handleDaysReply(senderId, convo, text) {
     return true;
   }
 
-  const plans = await db.getPlansForCountryAndDuration(convo.destination, days);
-  if (plans.length === 0) {
-    const available = await db.getAvailableDurations(convo.destination);
-    await msg.sendText(
-      senderId,
-      `${days} хоногт тохирох багц алга. Боломжтой хоног: ${available.join(", ")}`
-    );
+  const available = await db.getAvailableDurations(convo.destination);
+  if (available.length === 0) {
+    await msg.sendText(senderId, "Уучлаарай, энэ чиглэлд одоогоор багц алга байна.");
     return true;
   }
 
-  await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: days });
+  // Round up to the next available duration. If the request is longer than
+  // everything we offer, fall back to the longest available plan.
+  const matchedDuration = available.find((d) => d >= days) || available[available.length - 1];
+
+  const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+
+  if (matchedDuration !== days) {
+    await msg.sendText(
+      senderId,
+      `${days} хоногийн багц алга тул ${matchedDuration} хоногийн багцыг санал болгож байна:`
+    );
+  }
+
+  await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
   await msg.sendQuickReplies(
     senderId,
     "Дата хэмжээгээ сонгоно уу:",
