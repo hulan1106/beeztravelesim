@@ -69,9 +69,12 @@ async function handleDaysReply(senderId, convo, text) {
     return true;
   }
 
-  // Round up to the next available duration. If the request is longer than
-  // everything we offer, fall back to the longest available plan.
-  const matchedDuration = available.find((d) => d >= days) || available[available.length - 1];
+  // Smallest available duration stays exact (e.g. 7). Anything above that
+  // jumps straight to the largest available (e.g. 30) — middle tiers like
+  // 15 are skipped entirely for rounding purposes.
+  const smallest = available[0];
+  const largest = available[available.length - 1];
+  const matchedDuration = days <= smallest ? smallest : largest;
 
   const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
 
