@@ -144,7 +144,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendButton(
     senderId,
-    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай. Төлбөр төлөгдмөгц таны QR шууд чатанд нь ирнэ:`,
     invoice.url,
     "Төлбөр төлөх"
   );
