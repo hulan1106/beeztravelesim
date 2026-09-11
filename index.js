@@ -41,9 +41,10 @@ app.post("/webhook", async (req, res) => {
       if (event.message && event.message.is_echo) continue;
 
       const text = event.message?.text || "";
-      const quickReplyPayload = event.message?.quick_reply?.payload || null;
+      const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
 
-      // China/Korea/Japan purchase flow (text- or quick-reply-driven)
+      // China/Korea/Japan purchase flow (text- or quick-reply-driven, or
+      // persistent menu / postback-driven — e.g. the "Дахин эхлэх" menu item)
       try {
         const handled = await flow.handleMessage(senderId, text, quickReplyPayload);
         if (handled) continue;
