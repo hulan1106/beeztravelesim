@@ -10,13 +10,13 @@ const msg = require("./messenger");
 // (e.g. "USA & Canada", "Australia & New Zealand") — deliberately left out
 // so triggers only match the single-country plans.
 const DESTINATION_TRIGGERS = {
-  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad", "хятдын есим сонголт харах", "hytadd", "hytd", "Хятдын сим сонголт харах"],
-  "South Korea": ["korea", "солонгос", "kr", "solongos", "Солонгосын сим сонголт харах"],
-  "Japan": ["japan", "япон", "jp", "yapon","Японы сим сонголт харах"],
+  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
+  "South Korea": ["korea", "солонгос", "kr", "solongos"],
+  "Japan": ["japan", "япон", "jp", "yapon"],
   "Russia": ["russia", "орос", "ru"],
   "Germany": ["germany", "герман", "de"],
   "United States": ["usa", "america", "америк", "us"],
-  "Kazakhstan": ["kazakhstan", "казахстан", "kz", "қазақстан"],
+  "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
   "Thailand": ["thailand", "тайланд", "th"],
   "Turkey": ["turkey", "turkiye", "турк", "tr"],
   "Vietnam": ["vietnam", "вьетнам", "vn"],
@@ -73,6 +73,10 @@ async function handleMessage(senderId, text, payload) {
     return handleDaysReply(senderId, convo, text);
   }
 
+  if (state === "AWAITING_PLAN") {
+    return handlePlanTextReply(senderId, convo, text);
+  }
+
   const destination = matchDestination(text);
   if (destination) {
     await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
@@ -123,6 +127,33 @@ async function handleDaysReply(senderId, convo, text) {
   return true;
 }
 
+// Customer sometimes types a number ("10") instead of tapping a quick-reply
+// button. Match it against the GB options we just showed them for their
+// destination + duration, and proceed exactly as if they'd tapped it.
+async function handlePlanTextReply(senderId, convo, text) {
+  const typedGb = parseFloat((text || "").replace(",", ".").match(/[\d.]+/)?.[0] || "");
+
+  if (!Number.isNaN(typedGb)) {
+    const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
+    const match = plans.find((p) => Number(p.gb) === typedGb);
+    if (match) {
+      return handlePlanChosen(senderId, match.id);
+    }
+  }
+
+  // No match — remind them to tap a button instead of guessing silently.
+  const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
+  await msg.sendQuickReplies(
+    senderId,
+    "Уучлаарай, дээрх сонголтуудаас сонгоно уу:",
+    plans.map((p) => ({
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
+    }))
+  );
+  return true;
+}
+
 async function handlePlanChosen(senderId, planId) {
   const plan = await db.getPlanById(planId);
   if (!plan) {
@@ -144,7 +175,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendButton(
     senderId,
-    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай. Төлбөр төлөгдмөгц таны QR шууд чатанд нь ирнэ:`,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
     invoice.url,
     "Төлбөр төлөх"
   );
