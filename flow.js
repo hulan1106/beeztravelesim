@@ -65,6 +65,25 @@ async function handleMessage(senderId, text, payload) {
   const convo = await db.getConversation(senderId);
   const state = convo?.state || "IDLE";
 
+  // Global restart — works no matter what step the customer is stuck on.
+  const t = (text || "").trim().toLowerCase();
+  if (t === "дахин эхлэх" || payload === "RESTART_ESIM") {
+    await db.upsertConversation(senderId, {
+      state: "IDLE",
+      destination: null,
+      duration_days: null,
+      plan_id: null,
+      invoice_id: null,
+      invoice_number: null,
+    });
+    const destinations = Object.values(DISPLAY_NAMES).join(", ");
+    await msg.sendText(
+      senderId,
+      `Дахин эхэллээ 🔄 Аль улс руу явахаа сонгоно уу: ${destinations}`
+    );
+    return true;
+  }
+
   if (payload && payload.startsWith("PLAN|")) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
   }
@@ -175,10 +194,14 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendButton(
     senderId,
-    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөр төлөгдсөний дараа таны чат руу еСИМ QR очно:`,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
     invoice.url,
-    "QPAY төлөх"
+    "Төлбөр төлөх"
   );
+
+  await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
+    { title: "Дахин эхлэх", payload: "RESTART_ESIM" },
+  ]);
   return true;
 }
 
