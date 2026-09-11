@@ -196,7 +196,7 @@ async function handlePlanChosen(senderId, planId) {
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
     invoice.url,
-    "Төлбөр төлөх"
+    "QPAY төлөх"
   );
 
   await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
