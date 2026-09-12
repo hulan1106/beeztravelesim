@@ -198,10 +198,6 @@ async function handlePlanChosen(senderId, planId) {
     invoice.url,
     "QPAY төлөх"
   );
-
-  await msg.sendQuickReplies(senderId, "Төлбөр амжилтгүй болсон уу?", [
-    { title: "Дахин эхлэх", payload: "RESTART_ESIM" },
-  ]);
   return true;
 }
 
