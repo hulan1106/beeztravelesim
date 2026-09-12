@@ -59,6 +59,24 @@ function matchDestination(text) {
   return null;
 }
 
+// Starts (or restarts) the flow for a newly-matched destination. Shared by
+// the mid-flow "changed their mind" path and would also work for a fresh
+// IDLE-state match, so both call this instead of duplicating the reset.
+async function startDestinationFlow(senderId, destination) {
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_DAYS",
+    destination,
+    duration_days: null,
+    plan_id: null,
+    invoice_id: null,
+    invoice_number: null,
+  });
+  await msg.sendText(
+    senderId,
+    `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
+  );
+}
+
 // Returns true if this message was handled by the purchase flow — caller
 // should skip the generic menu fallback in that case.
 async function handleMessage(senderId, text, payload) {
@@ -88,22 +106,27 @@ async function handleMessage(senderId, text, payload) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
   }
 
+  // --- CHANGED: destination match now checked BEFORE the state-specific
+  // handlers below, not after. Previously a customer who'd already picked
+  // a country (state = AWAITING_DAYS or AWAITING_PLAN) and then typed a
+  // *different* country name would never reach matchDestination() at all —
+  // handleDaysReply/handlePlanTextReply claimed the message first and just
+  // treated "Хятад" as an invalid day-count/GB reply. Checking it first
+  // means naming a new destination always wins and restarts the flow,
+  // regardless of what step they were previously on.
+  const destination = matchDestination(text);
+  if (destination) {
+    await startDestinationFlow(senderId, destination);
+    return true;
+  }
+  // --- end CHANGED ---
+
   if (state === "AWAITING_DAYS") {
     return handleDaysReply(senderId, convo, text);
   }
 
   if (state === "AWAITING_PLAN") {
     return handlePlanTextReply(senderId, convo, text);
-  }
-
-  const destination = matchDestination(text);
-  if (destination) {
-    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
-    await msg.sendText(
-      senderId,
-      `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
-    );
-    return true;
   }
 
   return false; // not part of this flow
