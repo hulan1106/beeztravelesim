@@ -15,7 +15,7 @@ const DESTINATION_TRIGGERS = {
   "Japan": ["japan", "япон", "jp", "yapon"],
   "Russia": ["russia", "орос", "ru"],
   "Germany": ["germany", "герман", "de"],
-  "United States": ["usa", "america", "америк", "us"],
+  "United States": ["usa", "america", "америк", "us","ану"],
   "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
   "Thailand": ["thailand", "тайланд", "th"],
   "Turkey": ["turkey", "turkiye", "турк", "tr"],
