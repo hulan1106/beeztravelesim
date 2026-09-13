@@ -13,12 +13,6 @@ function query(text, params) {
 
 // --- eSIM plan catalog ---
 
-// A handful of destinations (Australia, Canada, Hong Kong, Indonesia, Laos,
-// Malaysia, South Korea, Turkey, United States) carry two slugs for the same
-// GB/duration — a base plan and a "_nonhkip"/"_Premium" network variant at a
-// higher price. DISTINCT ON + ORDER BY price picks the cheaper one per GB
-// tier for the automated quick-reply flow; both rows still live in the table
-// if you want to sell the premium variant manually elsewhere.
 async function getPlansForCountryAndDuration(destination, durationDays) {
   const { rows } = await query(
     `SELECT DISTINCT ON (gb) id, destination, gb, duration_days, slug, price_mnt
@@ -55,8 +49,8 @@ async function upsertConversation(senderId, fields) {
   const merged = { ...(existing || {}), ...fields, sender_id: senderId };
   await query(
     `INSERT INTO conversations
-       (sender_id, state, destination, duration_days, plan_id, invoice_id, invoice_number, order_no, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+       (sender_id, state, destination, duration_days, plan_id, invoice_id, invoice_number, order_no, iccid, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
      ON CONFLICT (sender_id) DO UPDATE SET
        state = EXCLUDED.state,
        destination = EXCLUDED.destination,
@@ -65,6 +59,7 @@ async function upsertConversation(senderId, fields) {
        invoice_id = EXCLUDED.invoice_id,
        invoice_number = EXCLUDED.invoice_number,
        order_no = EXCLUDED.order_no,
+       iccid = EXCLUDED.iccid,
        updated_at = now()`,
     [
       senderId,
@@ -75,6 +70,7 @@ async function upsertConversation(senderId, fields) {
       merged.invoice_id || null,
       merged.invoice_number || null,
       merged.order_no || null,
+      merged.iccid || null,
     ]
   );
 }
@@ -86,6 +82,28 @@ async function getConversationByInvoiceId(invoiceId) {
   return rows[0] || null;
 }
 
+// --- top-up orders ---
+// Separate from `conversations` since a customer can top up an eSIM from a
+// PAST purchase — this table just maps a byl.mn invoice to the top-up
+// details needed once payment confirms.
+
+async function createTopupOrder(senderId, invoiceId, invoiceNumber, iccid, orderNo, packageCode, gb) {
+  await query(
+    `INSERT INTO topup_orders (sender_id, invoice_id, invoice_number, iccid, order_no, package_code, gb, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'AWAITING_PAYMENT')`,
+    [senderId, String(invoiceId), invoiceNumber, iccid, orderNo, packageCode, gb]
+  );
+}
+
+async function getTopupOrderByInvoiceId(invoiceId) {
+  const { rows } = await query(`SELECT * FROM topup_orders WHERE invoice_id = $1`, [String(invoiceId)]);
+  return rows[0] || null;
+}
+
+async function markTopupOrderPaid(invoiceId) {
+  await query(`UPDATE topup_orders SET status = 'PAID' WHERE invoice_id = $1`, [String(invoiceId)]);
+}
+
 module.exports = {
   pool,
   getPlansForCountryAndDuration,
@@ -94,4 +112,7 @@ module.exports = {
   getConversation,
   upsertConversation,
   getConversationByInvoiceId,
+  createTopupOrder,
+  getTopupOrderByInvoiceId,
+  markTopupOrderPaid,
 };
