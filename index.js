@@ -1,187 +1,380 @@
-const express = require("express");
-const axios = require("axios");
-
 const db = require("./db");
-const esimaccess = require("./esimaccess");
+const byl = require("./byl");
 const msg = require("./messenger");
-const flow = require("./flow");
+const esimaccess = require("./esimaccess");
 
-const app = express();
-app.use(express.json());
+// Maps what a customer types to the exact `destination` string in esim_plans
+// (must match the xlsx column verbatim). China has multiple listed products —
+// "China mainland" is the plain single-country plan; the mainland+HK+Macao
+// and mainland+Japan+Korea bundles are separate products, deliberately not
+// wired to this trigger. Same logic applies to other bundled rows
+// (e.g. "USA & Canada", "Australia & New Zealand") — deliberately left out
+// so triggers only match the single-country plans.
+const DESTINATION_TRIGGERS = {
+  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
+  "South Korea": ["korea", "солонгос", "kr", "solongos"],
+  "Japan": ["japan", "япон", "jp", "yapon"],
+  "Russia": ["russia", "орос", "ru"],
+  "Germany": ["germany", "герман", "de"],
+  "United States": ["usa", "america", "америк", "us"],
+  "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
+  "Thailand": ["thailand", "тайланд", "th"],
+  "Turkey": ["turkey", "turkiye", "турк", "tr"],
+  "Vietnam": ["vietnam", "вьетнам", "vn"],
+  "Canada": ["canada", "канад", "ca"],
+  "Qatar": ["qatar", "катар", "qa"],
+  "Czech Republic": ["czech", "чех", "cz"],
+  "Australia": ["australia", "австрали", "au"],
+  "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират"],
+  "Georgia": ["georgia", "гүрж", "ge"],
+  "Indonesia": ["indonesia", "индонез", "id"],
+};
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "beeztravel_verify";
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+// Display label used in bot replies — separate from the DB `destination` key
+// so DB values can read naturally in Mongolian to the customer.
+const DISPLAY_NAMES = {
+  "China mainland": "Хятад",
+  "South Korea": "Солонгос",
+  "Japan": "Япон",
+  "Russia": "Орос",
+  "Germany": "Герман",
+  "United States": "Америк",
+  "Kazakhstan": "Казахстан",
+  "Thailand": "Тайланд",
+  "Turkey": "Турк",
+  "Vietnam": "Вьетнам",
+  "Canada": "Канад",
+  "Qatar": "Катар",
+  "Czech Republic": "Чех",
+  "Australia": "Австрали",
+  "United Arab Emirates": "АНЭУ",
+  "Georgia": "Гүрж",
+  "Indonesia": "Индонез",
+};
 
-const GRAPH_URL = "https://graph.facebook.com/v19.0/me/messages";
+const USAGE_TRIGGERS = [
+  "үлдэгдэл шалгах",
+  "дата шалгах",
+  "дата авах",
+  "дата нэмэх",
+  "дата авъя",
+  "дата нэмье",
+  "check usage",
+  "usage",
+];
 
-// --- FACEBOOK WEBHOOK VERIFICATION (unchanged) ---
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook verified!");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+function matchDestination(text) {
+  const t = (text || "").trim().toLowerCase();
+  for (const [destination, triggers] of Object.entries(DESTINATION_TRIGGERS)) {
+    if (triggers.includes(t)) return destination;
   }
-});
+  return null;
+}
 
-// --- RECEIVE MESSENGER MESSAGES ---
-app.post("/webhook", async (req, res) => {
-  const body = req.body;
-  if (body.object !== "page") return res.sendStatus(404);
+// Returns true if this message was handled by the purchase flow — caller
+// should skip the generic menu fallback in that case.
+async function handleMessage(senderId, text, payload) {
+  const convo = await db.getConversation(senderId);
+  const state = convo?.state || "IDLE";
 
-  for (const entry of body.entry) {
-    const pageId = entry.id;
-    for (const event of entry.messaging) {
-      const senderId = event.sender.id;
-
-      if (senderId === pageId) continue;
-      if (event.message && event.message.is_echo) continue;
-
-      const text = event.message?.text || "";
-      const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
-
-      // China/Korea/Japan purchase flow (text- or quick-reply-driven, or
-      // persistent menu / postback-driven — e.g. the "Дахин эхлэх" menu item)
-      try {
-        const handled = await flow.handleMessage(senderId, text, quickReplyPayload);
-        if (handled) continue;
-      } catch (err) {
-        console.error("flow error:", err.response?.data || err.message);
-        await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
-        continue;
-      }
-
-      // Anything not recognized by the purchase flow is now simply ignored
-      // (fallback menu removed).
-    }
-  }
-  res.status(200).send("EVENT_RECEIVED");
-});
-
-// --- SAFARI ESCAPE PAGE (for iPhone users stuck in Messenger's in-app browser) ---
-// QPay/bank apps can't open properly inside Facebook Messenger's built-in
-// browser on iOS. This page tries an automatic escape trick (x-safari-https://,
-// unreliable inside Meta's own apps but harmless to attempt) and — regardless
-// of whether that works — always shows clear manual instructions plus a
-// direct link, so nobody gets stuck on a blank screen.
-app.get("/pay-redirect", (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || !targetUrl.startsWith("http")) {
-    return res.status(400).send("Missing or invalid url parameter");
-  }
-
-  const safariAttemptUrl = "x-safari-" + targetUrl.replace(/^https?:\/\//, "https://");
-  const safeTargetUrl = targetUrl.replace(/"/g, "&quot;");
-  const safeSafariUrl = safariAttemptUrl.replace(/"/g, "&quot;");
-
-  res.status(200).send(`<!DOCTYPE html>
-<html lang="mn">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Төлбөр рүү шилжиж байна...</title>
-<style>
-  body { font-family: -apple-system, sans-serif; background: #fff7fa; margin: 0; padding: 24px 16px; color: #101018; }
-  .card { max-width: 480px; margin: 0 auto; background: #fff; border: 1px solid #ffd0dd; border-radius: 16px; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 12px; }
-  p { font-size: 15px; line-height: 1.6; color: #444; }
-  .steps { background: #fafafa; border: 1px solid #eee; border-radius: 12px; padding: 16px; margin: 16px 0; }
-  .steps ol { margin: 0; padding-left: 20px; }
-  .steps li { margin-bottom: 8px; font-size: 15px; }
-  .btn { display: block; text-align: center; background: #f71355; color: #fff; text-decoration: none;
-         padding: 14px; border-radius: 10px; font-weight: 700; font-size: 15px; margin-top: 8px; }
-  .badge { display: inline-block; background: #fff0f5; border: 1px solid #ffb8cc; border-radius: 999px;
-           color: #f71355; font-size: 12px; font-weight: 800; padding: 6px 10px; margin-bottom: 12px; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <div class="badge">ТӨЛБӨРИЙН ХОЛБООС</div>
-    <h1>Төлбөр хийхийн тулд Safari/Chrome ашиглана уу</h1>
-    <p>iPhone дээр Messenger-ийн дотоод хөтчөөр банкны апп (QPay гэх мэт) зөв нээгддэггүй тул та доорх алхмуудыг дагана уу:</p>
-    <div class="steps">
-      <ol>
-        <li>Дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
-        <li><strong>"Нээх Safari-аар"</strong> эсвэл <strong>"Open in Safari/Browser"</strong> сонголтыг дарна уу</li>
-        <li>Safari дээр нээгдсэний дараа төлбөрөө хэвийн үргэлжлүүлээрэй</li>
-      </ol>
-    </div>
-    <a class="btn" href="${safeTargetUrl}">Төлбөрийн хуудас руу очих →</a>
-  </div>
-  <script>
-    // Best-effort automatic attempt — silently does nothing if unsupported.
-    try {
-      window.location.href = "${safeSafariUrl}";
-    } catch (e) {}
-  </script>
-</body>
-</html>`);
-});
-
-// --- byl.mn PAYMENT WEBHOOK ---
-// Configure this URL (https://<your-railway-domain>/webhook/byl) as the
-// project webhook in the byl.mn dashboard, subscribed to invoice.paid.
-app.post("/webhook/byl", async (req, res) => {
-  res.status(200).send("OK"); // ack immediately, do the work after
-
-  const event = req.body;
-  if (event.type !== "invoice.paid") return;
-
-  const invoice = event.data?.object;
-  if (!invoice) return;
-
-  const convo = await db.getConversationByInvoiceId(invoice.id);
-  if (!convo) {
-    console.warn("No conversation found for paid invoice", invoice.id);
-    return;
-  }
-
-  const plan = await db.getPlanById(convo.plan_id);
-  if (!plan) {
-    console.error("Plan missing for conversation", convo.sender_id);
-    return;
-  }
-
-  try {
-    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
-
-    const orderNo = await esimaccess.orderEsim({
-      packageCode: plan.slug,
-      transactionId: `beez_${invoice.id}_${Date.now()}`,
+  // Global restart — works no matter what step the customer is stuck on.
+  const t = (text || "").trim().toLowerCase();
+  if (t === "дахин эхлэх" || payload === "RESTART_ESIM") {
+    await db.upsertConversation(senderId, {
+      state: "IDLE",
+      destination: null,
+      duration_days: null,
+      plan_id: null,
+      invoice_id: null,
+      invoice_number: null,
+      order_no: null,
+      iccid: null,
     });
-
-    await db.upsertConversation(convo.sender_id, { state: "PROVISIONING", order_no: orderNo });
-
-    const profile = await esimaccess.queryEsimProfile(orderNo);
-    if (!profile) {
-      await msg.sendText(
-        convo.sender_id,
-        "еСИМ бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
-      );
-      return;
-    }
-
-    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
-    await msg.sendButtons(
-      convo.sender_id,
-      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`,
-      [
-        { title: "Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
-        { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
-      ]
-    );
-    await db.upsertConversation(convo.sender_id, { state: "DONE" });
-  } catch (err) {
-    console.error("eSIM provisioning failed:", err.response?.data || err.message);
+    const destinations = Object.values(DISPLAY_NAMES).join(", ");
     await msg.sendText(
-      convo.sender_id,
-      "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+      senderId,
+      `Дахин эхэллээ 🔄 Аль улс руу явахаа сонгоно уу: ${destinations}`
     );
+    return true;
   }
-});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✈️ Beez Travel eSIM bot running on port ${PORT}`));
+  if (payload && payload.startsWith("PLAN|")) {
+    return handlePlanChosen(senderId, Number(payload.split("|")[1]));
+  }
+
+  if (payload && payload.startsWith("TOPUPPLAN|")) {
+    return handleTopupPlanChosen(senderId, payload);
+  }
+
+  if (payload === "TOPUP_YES") {
+    return handleTopupYes(senderId, convo);
+  }
+
+  if (payload === "TOPUP_NO") {
+    await db.upsertConversation(senderId, { state: "IDLE" });
+    await msg.sendText(senderId, "Ойлголоо 👍 Өөр асуух зүйл байвал бичээрэй.");
+    return true;
+  }
+
+  if (USAGE_TRIGGERS.includes(t)) {
+    await db.upsertConversation(senderId, { state: "AWAITING_USAGE_ORDER" });
+    await msg.sendText(
+      senderId,
+      "Захиалгын дугаараа бичнэ үү (жишээ нь: B26020700440027)"
+    );
+    return true;
+  }
+
+  if (state === "AWAITING_USAGE_ORDER") {
+    return handleUsageOrderReply(senderId, text);
+  }
+
+  if (state === "AWAITING_DAYS") {
+    return handleDaysReply(senderId, convo, text);
+  }
+
+  if (state === "AWAITING_PLAN") {
+    return handlePlanTextReply(senderId, convo, text);
+  }
+
+  const destination = matchDestination(text);
+  if (destination) {
+    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
+    await msg.sendText(
+      senderId,
+      `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
+    );
+    return true;
+  }
+
+  return false; // not part of this flow
+}
+
+async function handleDaysReply(senderId, convo, text) {
+  const days = parseInt((text || "").trim(), 10);
+  if (!Number.isInteger(days) || days <= 0) {
+    await msg.sendText(senderId, "Хоногийн тоог зөвхөн тоогоор бичнэ үү, жишээ нь: 7");
+    return true;
+  }
+
+  const available = await db.getAvailableDurations(convo.destination);
+  if (available.length === 0) {
+    await msg.sendText(senderId, "Уучлаарай, энэ чиглэлд одоогоор багц алга байна.");
+    return true;
+  }
+
+  // 1-2 days stays at the smallest available tier (e.g. 7). Anything above
+  // 2 days targets 30 days specifically (not the true max, which can run
+  // much higher for some destinations, e.g. 60/90/180). Falls back to the
+  // largest available duration if 30 isn't offered for this destination.
+  const smallest = available[0];
+  const preferredUpsell = available.includes(30)
+    ? 30
+    : available[available.length - 1];
+  const matchedDuration = days <= 2 ? smallest : preferredUpsell;
+
+  const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+
+  await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
+  await msg.sendQuickReplies(
+    senderId,
+    "Дата хэмжээгээ сонгоно уу:",
+    plans.map((p) => ({
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
+    }))
+  );
+  return true;
+}
+
+// Customer sometimes types a number ("10") instead of tapping a quick-reply
+// button. Match it against the GB options we just showed them for their
+// destination + duration, and proceed exactly as if they'd tapped it.
+async function handlePlanTextReply(senderId, convo, text) {
+  const typedGb = parseFloat((text || "").replace(",", ".").match(/[\d.]+/)?.[0] || "");
+
+  if (!Number.isNaN(typedGb)) {
+    const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
+    const match = plans.find((p) => Number(p.gb) === typedGb);
+    if (match) {
+      return handlePlanChosen(senderId, match.id);
+    }
+  }
+
+  // No match — remind them to tap a button instead of guessing silently.
+  const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
+  await msg.sendQuickReplies(
+    senderId,
+    "Уучлаарай, дээрх сонголтуудаас сонгоно уу:",
+    plans.map((p) => ({
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
+    }))
+  );
+  return true;
+}
+
+async function handlePlanChosen(senderId, planId) {
+  const plan = await db.getPlanById(planId);
+  if (!plan) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const invoice = await byl.createInvoice(
+    plan.price_mnt,
+    `Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног`
+  );
+
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_PAYMENT",
+    plan_id: plan.id,
+    invoice_id: String(invoice.id),
+    invoice_number: invoice.number,
+  });
+
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
+  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
+
+  await msg.sendButton(
+    senderId,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
+    payUrl,
+    "QPAY төлөх"
+  );
+  return true;
+}
+
+// --- USAGE CHECK + TOP-UP FLOW ---
+
+async function handleUsageOrderReply(senderId, text) {
+  const orderNo = (text || "").trim().toUpperCase();
+  if (!orderNo || orderNo.length < 6) {
+    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B26020700440027)");
+    return true;
+  }
+
+  const esim = await esimaccess.queryEsimByOrderNo(orderNo);
+  if (!esim) {
+    await msg.sendText(
+      senderId,
+      "Олдсонгүй 😕 Захиалгын дугаараа шалгаад дахин илгээнэ үү, эсвэл түр хүлээгээд дахин оролдоно уу."
+    );
+    return true;
+  }
+
+  const iccid = esim.iccid || "";
+  const expiredTime = esim.expiredTime || "—";
+  const totalVolume = Number(esim.totalVolume || 0);
+  const usedVolume = Number(esim.orderUsage || 0);
+  const remaining = Math.max(0, totalVolume - usedVolume);
+
+  const usageText = totalVolume
+    ? `${esimaccess.formatBytes(usedVolume)} хэрэглэсэн / ${esimaccess.formatBytes(totalVolume)} нийт`
+    : "—";
+  const remainText = totalVolume ? esimaccess.formatBytes(remaining) : "—";
+
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_TOPUP_CHOICE",
+    order_no: orderNo,
+    iccid,
+  });
+
+  await msg.sendText(
+    senderId,
+    `📶 Захиалга: ${orderNo}
+Дуусах хугацаа: ${expiredTime}
+Хэрэглээ: ${usageText}
+Үлдэгдэл: ${remainText}`
+  );
+
+  await msg.sendQuickReplies(senderId, "Дата нэмэх үү?", [
+    { title: "Тийм", payload: "TOPUP_YES" },
+    { title: "Үгүй", payload: "TOPUP_NO" },
+  ]);
+  return true;
+}
+
+async function handleTopupYes(senderId, convo) {
+  if (!convo?.iccid) {
+    await msg.sendText(senderId, "Уучлаарай, захиалгын мэдээлэл дутуу байна. Захиалгын дугаараа дахин илгээнэ үү.");
+    return true;
+  }
+
+  let packages;
+  try {
+    packages = await esimaccess.listTopupPackages(convo.iccid);
+  } catch (err) {
+    console.error("listTopupPackages error:", err.message);
+    await msg.sendText(senderId, "Уучлаарай, дата нэмэх сонголт татахад алдаа гарлаа. Дахин оролдоно уу.");
+    return true;
+  }
+
+  if (!packages.length) {
+    await msg.sendText(
+      senderId,
+      "Уучлаарай, энэ eSIM-д одоогоор дата нэмэх боломжгүй байна. Манай тусламжийн багтай холбогдоно уу."
+    );
+    return true;
+  }
+
+  await db.upsertConversation(senderId, { state: "AWAITING_TOPUP_PLAN" });
+
+  await msg.sendQuickReplies(
+    senderId,
+    "Нэмэх багцаа сонгоно уу:",
+    packages.map((p) => {
+      const gb = (Number(p.volume) / 1073741824).toFixed(0);
+      const priceMnt = esimaccess.topupPriceToMnt(Number(p.price));
+      return {
+        title: `${gb} GB - ${priceMnt.toLocaleString()}₮`,
+        payload: `TOPUPPLAN|${p.packageCode}|${convo.iccid}|${convo.order_no}`,
+      };
+    })
+  );
+  return true;
+}
+
+async function handleTopupPlanChosen(senderId, payload) {
+  const [, packageCode, iccid, orderNo] = payload.split("|");
+
+  let packages;
+  try {
+    packages = await esimaccess.listTopupPackages(iccid);
+  } catch (err) {
+    console.error("listTopupPackages error:", err.message);
+    await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const pkg = packages.find((p) => p.packageCode === packageCode);
+  if (!pkg) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
+  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
+
+  const invoice = await byl.createInvoice(
+    priceMnt,
+    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
+  );
+
+  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
+
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
+  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
+
+  await db.upsertConversation(senderId, { state: "IDLE" });
+
+  await msg.sendButton(
+    senderId,
+    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
+    payUrl,
+    "QPAY төлөх"
+  );
+  return true;
+}
+
+module.exports = { handleMessage, matchDestination, DISPLAY_NAMES };
