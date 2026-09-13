@@ -61,12 +61,6 @@ const USAGE_TRIGGERS = [
   "дата нэмье",
   "check usage",
   "usage",
-   "data avii",
-   "data nemii",
-   "data shalgii",
-   "data shalgay",
-   "uldegdel",
-   "uldegdel shalgah",
 ];
 
 function matchDestination(text) {
@@ -253,6 +247,11 @@ async function handlePlanChosen(senderId, planId) {
     payUrl,
     "QPAY төлөх"
   );
+
+  await msg.sendText(
+    senderId,
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
   return true;
 }
 
@@ -384,6 +383,11 @@ async function handleTopupPlanChosen(senderId, payload) {
     `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
     payUrl,
     "QPAY төлөх"
+  );
+
+  await msg.sendText(
+    senderId,
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
   return true;
 }
