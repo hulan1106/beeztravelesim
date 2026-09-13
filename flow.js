@@ -1,6 +1,7 @@
 const db = require("./db");
 const byl = require("./byl");
 const msg = require("./messenger");
+const esimaccess = require("./esimaccess");
 
 // Maps what a customer types to the exact `destination` string in esim_plans
 // (must match the xlsx column verbatim). China has multiple listed products —
@@ -51,6 +52,17 @@ const DISPLAY_NAMES = {
   "Indonesia": "Индонез",
 };
 
+const USAGE_TRIGGERS = [
+  "үлдэгдэл шалгах",
+  "дата шалгах",
+  "дата авах",
+  "дата нэмэх",
+  "дата авъя",
+  "дата нэмье",
+  "check usage",
+  "usage",
+];
+
 function matchDestination(text) {
   const t = (text || "").trim().toLowerCase();
   for (const [destination, triggers] of Object.entries(DESTINATION_TRIGGERS)) {
@@ -75,6 +87,8 @@ async function handleMessage(senderId, text, payload) {
       plan_id: null,
       invoice_id: null,
       invoice_number: null,
+      order_no: null,
+      iccid: null,
     });
     const destinations = Object.values(DISPLAY_NAMES).join(", ");
     await msg.sendText(
@@ -86,6 +100,33 @@ async function handleMessage(senderId, text, payload) {
 
   if (payload && payload.startsWith("PLAN|")) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
+  }
+
+  if (payload && payload.startsWith("TOPUPPLAN|")) {
+    return handleTopupPlanChosen(senderId, payload);
+  }
+
+  if (payload === "TOPUP_YES") {
+    return handleTopupYes(senderId, convo);
+  }
+
+  if (payload === "TOPUP_NO") {
+    await db.upsertConversation(senderId, { state: "IDLE" });
+    await msg.sendText(senderId, "Ойлголоо 👍 Өөр асуух зүйл байвал бичээрэй.");
+    return true;
+  }
+
+  if (USAGE_TRIGGERS.includes(t)) {
+    await db.upsertConversation(senderId, { state: "AWAITING_USAGE_ORDER" });
+    await msg.sendText(
+      senderId,
+      "Захиалгын дугаараа бичнэ үү (жишээ нь: B26020700440027)"
+    );
+    return true;
+  }
+
+  if (state === "AWAITING_USAGE_ORDER") {
+    return handleUsageOrderReply(senderId, text);
   }
 
   if (state === "AWAITING_DAYS") {
@@ -198,6 +239,138 @@ async function handlePlanChosen(senderId, planId) {
   await msg.sendButton(
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
+    payUrl,
+    "QPAY төлөх"
+  );
+  return true;
+}
+
+// --- USAGE CHECK + TOP-UP FLOW ---
+
+async function handleUsageOrderReply(senderId, text) {
+  const orderNo = (text || "").trim().toUpperCase();
+  if (!orderNo || orderNo.length < 6) {
+    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B26020700440027)");
+    return true;
+  }
+
+  const esim = await esimaccess.queryEsimByOrderNo(orderNo);
+  if (!esim) {
+    await msg.sendText(
+      senderId,
+      "Олдсонгүй 😕 Захиалгын дугаараа шалгаад дахин илгээнэ үү, эсвэл түр хүлээгээд дахин оролдоно уу."
+    );
+    return true;
+  }
+
+  const iccid = esim.iccid || "";
+  const expiredTime = esim.expiredTime || "—";
+  const totalVolume = Number(esim.totalVolume || 0);
+  const usedVolume = Number(esim.orderUsage || 0);
+  const remaining = Math.max(0, totalVolume - usedVolume);
+
+  const usageText = totalVolume
+    ? `${esimaccess.formatBytes(usedVolume)} хэрэглэсэн / ${esimaccess.formatBytes(totalVolume)} нийт`
+    : "—";
+  const remainText = totalVolume ? esimaccess.formatBytes(remaining) : "—";
+
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_TOPUP_CHOICE",
+    order_no: orderNo,
+    iccid,
+  });
+
+  await msg.sendText(
+    senderId,
+    `📶 Захиалга: ${orderNo}
+Дуусах хугацаа: ${expiredTime}
+Хэрэглээ: ${usageText}
+Үлдэгдэл: ${remainText}`
+  );
+
+  await msg.sendQuickReplies(senderId, "Дата нэмэх үү?", [
+    { title: "Тийм", payload: "TOPUP_YES" },
+    { title: "Үгүй", payload: "TOPUP_NO" },
+  ]);
+  return true;
+}
+
+async function handleTopupYes(senderId, convo) {
+  if (!convo?.iccid) {
+    await msg.sendText(senderId, "Уучлаарай, захиалгын мэдээлэл дутуу байна. Захиалгын дугаараа дахин илгээнэ үү.");
+    return true;
+  }
+
+  let packages;
+  try {
+    packages = await esimaccess.listTopupPackages(convo.iccid);
+  } catch (err) {
+    console.error("listTopupPackages error:", err.message);
+    await msg.sendText(senderId, "Уучлаарай, дата нэмэх сонголт татахад алдаа гарлаа. Дахин оролдоно уу.");
+    return true;
+  }
+
+  if (!packages.length) {
+    await msg.sendText(
+      senderId,
+      "Уучлаарай, энэ eSIM-д одоогоор дата нэмэх боломжгүй байна. Манай тусламжийн багтай холбогдоно уу."
+    );
+    return true;
+  }
+
+  await db.upsertConversation(senderId, { state: "AWAITING_TOPUP_PLAN" });
+
+  await msg.sendQuickReplies(
+    senderId,
+    "Нэмэх багцаа сонгоно уу:",
+    packages.map((p) => {
+      const gb = (Number(p.volume) / 1073741824).toFixed(0);
+      const priceMnt = esimaccess.topupPriceToMnt(Number(p.price));
+      return {
+        title: `${gb} GB - ${priceMnt.toLocaleString()}₮`,
+        payload: `TOPUPPLAN|${p.packageCode}|${convo.iccid}|${convo.order_no}`,
+      };
+    })
+  );
+  return true;
+}
+
+async function handleTopupPlanChosen(senderId, payload) {
+  const [, packageCode, iccid, orderNo] = payload.split("|");
+
+  let packages;
+  try {
+    packages = await esimaccess.listTopupPackages(iccid);
+  } catch (err) {
+    console.error("listTopupPackages error:", err.message);
+    await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const pkg = packages.find((p) => p.packageCode === packageCode);
+  if (!pkg) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
+  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
+
+  const invoice = await byl.createInvoice(
+    priceMnt,
+    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
+  );
+
+  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
+
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
+  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
+
+  await db.upsertConversation(senderId, { state: "IDLE" });
+
+  await msg.sendButton(
+    senderId,
+    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
     payUrl,
     "QPAY төлөх"
   );
