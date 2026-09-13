@@ -116,6 +116,21 @@ async function handleMessage(senderId, text, payload) {
     return true;
   }
 
+  // Recognized trigger words always interrupt whatever step the customer is
+  // currently on — e.g. typing "хятад" while the bot is waiting for an order
+  // number should switch to buying a plan, not get swallowed as an invalid
+  // order number. Only truly free-text input (order numbers, day counts, GB
+  // picks) falls through to the state-specific handlers below.
+  const destination = matchDestination(text);
+  if (destination) {
+    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
+    await msg.sendText(
+      senderId,
+      `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
+    );
+    return true;
+  }
+
   if (USAGE_TRIGGERS.includes(t)) {
     await db.upsertConversation(senderId, { state: "AWAITING_USAGE_ORDER" });
     await msg.sendText(
@@ -135,16 +150,6 @@ async function handleMessage(senderId, text, payload) {
 
   if (state === "AWAITING_PLAN") {
     return handlePlanTextReply(senderId, convo, text);
-  }
-
-  const destination = matchDestination(text);
-  if (destination) {
-    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
-    await msg.sendText(
-      senderId,
-      `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
-    );
-    return true;
   }
 
   return false; // not part of this flow
