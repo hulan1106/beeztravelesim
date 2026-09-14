@@ -175,7 +175,7 @@ app.post("/webhook/byl", async (req, res) => {
     await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
     await msg.sendButtons(
       convo.sender_id,
-      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`,
+      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.Үлдэгдэл шалгах дата нэмэх бол чат руугаа үлдэгдэл гэж бичээрэй!`,
       [
         { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
       ]
