@@ -60,7 +60,7 @@ const USAGE_TRIGGERS = [
   "дата авъя",
   "дата нэмье",
   "check usage",
-  "usage"
+  "usage",
   "үлдэгдэл",
 ];
 
