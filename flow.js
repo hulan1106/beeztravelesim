@@ -248,7 +248,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоосыг browser-т хуулаад төлбөрөө төлнө үү /iPhone хэрэглэгч/:\n${invoice.url}`
   );
   return true;
 }
