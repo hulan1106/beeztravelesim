@@ -14,9 +14,9 @@ const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
-  "Russia": ["russia", "орос", "ru", "oros"],
-  "Germany": ["germany", "герман", "de", "german"],
-  "United States": ["usa", "america", "америк", "us", "amerik"],
+  "Russia": ["russia", "орос", "ru"],
+  "Germany": ["germany", "герман", "de"],
+  "United States": ["usa", "america", "америк", "us"],
   "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
   "Thailand": ["thailand", "тайланд", "th"],
   "Turkey": ["turkey", "turkiye", "турк", "tr"],
@@ -55,12 +55,13 @@ const DISPLAY_NAMES = {
 const USAGE_TRIGGERS = [
   "үлдэгдэл шалгах",
   "дата шалгах",
+  "дата авах",
   "дата нэмэх",
   "дата авъя",
   "дата нэмье",
   "check usage",
-  "usage",
-  "uldegdel",
+  "usage"
+  "үлдэгдэл",
 ];
 
 function matchDestination(text) {
@@ -238,19 +239,16 @@ async function handlePlanChosen(senderId, planId) {
     invoice_number: invoice.number,
   });
 
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
-  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
-
   await msg.sendButton(
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
-    payUrl,
+    invoice.url,
     "QPAY төлөх"
   );
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол линкийг browser-таа хуулаад төлбөр төлнө.:\n${invoice.url}`
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
   return true;
 }
@@ -373,15 +371,12 @@ async function handleTopupPlanChosen(senderId, payload) {
 
   await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
 
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
-  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
-
   await db.upsertConversation(senderId, { state: "IDLE" });
 
   await msg.sendButton(
     senderId,
     `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
-    payUrl,
+    invoice.url,
     "QPAY төлөх"
   );
 
