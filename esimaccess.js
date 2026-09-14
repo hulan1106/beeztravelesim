@@ -51,6 +51,7 @@ async function queryEsimProfile(orderNo, { retries = 8, delayMs = 5000 } = {}) {
       return {
         iccid: profile.iccid,
         qrCodeUrl: profile.qrCodeUrl,
+        ac: profile.ac,
       };
     }
     await new Promise((r) => setTimeout(r, delayMs));
