@@ -250,7 +250,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+    `Хэрэв дээрх товч ажиллахгүй бол линкийг browser-таа хуулаад төлбөр төлнө.:\n${invoice.url}`
   );
   return true;
 }
