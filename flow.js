@@ -62,6 +62,7 @@ const USAGE_TRIGGERS = [
   "check usage",
   "usage",
   "үлдэгдэл",
+  "uldegdel",
 ];
 
 function matchDestination(text) {
