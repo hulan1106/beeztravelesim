@@ -100,13 +100,13 @@ app.get("/pay-redirect", (req, res) => {
 <body>
   <div class="card">
     <div class="badge">ТӨЛБӨРИЙН ХОЛБООС</div>
-    <h1>Төлбөр хийхийн тулд Safari/Chrome ашиглана уу</h1>
-    <p>iPhone дээр Messenger-ийн дотоод хөтчөөр банкны апп (QPay гэх мэт) зөв нээгддэггүй тул та доорх алхмуудыг дагана уу:</p>
+    <h1>Банкны апп нээгдэхгүй бол энэ алхмуудыг хийнэ үү</h1>
+    <p>Дараагийн хуудсанд орж, банкаа сонгож дарахад заримдаа юу ч болохгүй байж болно. Ийм тохиолдолд:</p>
     <div class="steps">
       <ol>
-        <li>Дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
-        <li><strong>"Нээх Safari-аар"</strong> эсвэл <strong>"Open in Safari/Browser"</strong> сонголтыг дарна уу</li>
-        <li>Safari дээр нээгдсэний дараа төлбөрөө хэвийн үргэлжлүүлээрэй</li>
+        <li>Доорх товч дээр дарж төлбөрийн хуудсанд орно уу</li>
+        <li>Банкаа сонгоод дарахад юу ч болохгүй бол дэлгэцийн дээд буланд байгаа <strong>"•••"</strong> товч дээр дарна уу</li>
+        <li><strong>"Нээх Safari-аар"</strong> сонголтыг дарж, дараа нь банкаа дахин сонгоно уу</li>
       </ol>
     </div>
     <a class="btn" href="${safeTargetUrl}">Төлбөрийн хуудас руу очих →</a>
@@ -177,10 +177,28 @@ app.post("/webhook/byl", async (req, res) => {
       convo.sender_id,
       `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`,
       [
-        { title: "Үлдэгдэл шалгах", url: "https://esim.beez.mn/check-usage/" },
         { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
       ]
     );
+
+    // Direct tap-to-install links, no QR scanning needed. iOS 17.4+ and
+    // Android 10+ support this — older devices should just use the QR code
+    // above instead, which always works regardless of OS version.
+    if (profile.ac) {
+      const encodedAc = encodeURIComponent(profile.ac);
+      const iosInstallUrl = `https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
+      const androidInstallUrl = `https://esimsetup.android.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
+
+      await msg.sendButtons(
+        convo.sender_id,
+        "QR код уншуулахгүйгээр, доорх товчоор шууд суулгаж болно (iPhone 17.4+, Android 10+):",
+        [
+          { title: "📱 iPhone дээр суулгах", url: iosInstallUrl },
+          { title: "🤖 Android дээр суулгах", url: androidInstallUrl },
+        ]
+      );
+    }
+
     await db.upsertConversation(convo.sender_id, { state: "DONE" });
   } catch (err) {
     console.error("eSIM provisioning failed:", err.response?.data || err.message);
