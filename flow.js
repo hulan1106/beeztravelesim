@@ -55,12 +55,12 @@ const DISPLAY_NAMES = {
 const USAGE_TRIGGERS = [
   "үлдэгдэл шалгах",
   "дата шалгах",
-  "дата авах",
   "дата нэмэх",
   "дата авъя",
   "дата нэмье",
   "check usage",
   "usage",
+  "uldegdel",
 ];
 
 function matchDestination(text) {
