@@ -51,6 +51,7 @@ const DISPLAY_NAMES = {
   "United Arab Emirates": "АНЭУ",
   "Georgia": "Гүрж",
   "Indonesia": "Индонез",
+   "Italy": "Итали",
 };
 
 const USAGE_TRIGGERS = [
