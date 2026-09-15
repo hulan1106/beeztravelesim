@@ -26,6 +26,7 @@ async function createOrder(amountMnt, description, redirectUrl) {
         password: TDB_API_PASSWORD,
       },
       headers: { "Content-Type": "application/json" },
+      timeout: 15000,
     }
   );
 
