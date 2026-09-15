@@ -5,6 +5,7 @@ const db = require("./db");
 const esimaccess = require("./esimaccess");
 const msg = require("./messenger");
 const flow = require("./flow");
+const tdb = require("./tdb");
 
 const app = express();
 app.use(express.json());
@@ -59,6 +60,28 @@ app.post("/webhook", async (req, res) => {
     }
   }
   res.status(200).send("EVENT_RECEIVED");
+});
+
+// --- TEMPORARY: TDB test route ---
+// Creates one small test order and shows you the hppUrl to open manually,
+// so we can see what payment options actually appear on TDB's hosted page.
+// Remove this route once we've confirmed what we need to know.
+app.get("/tdb-test", async (req, res) => {
+  try {
+    const order = await tdb.createOrder(1000, "Test order", "https://example.com/redirect");
+    res.status(200).send(`
+      <h2>TDB test order created</h2>
+      <p>Order ID: ${order.id}</p>
+      <p><a href="${order.fullUrl}" target="_blank">Open the hosted payment page →</a></p>
+      <p>Raw URL: ${order.fullUrl}</p>
+    `);
+  } catch (err) {
+    console.error("TDB test error:", err.response?.data || err.message);
+    res.status(500).send(`
+      <h2>TDB test failed</h2>
+      <pre>${JSON.stringify(err.response?.data || err.message, null, 2)}</pre>
+    `);
+  }
 });
 
 // --- SAFARI ESCAPE PAGE (for iPhone users stuck in Messenger's in-app browser) ---
@@ -175,7 +198,7 @@ app.post("/webhook/byl", async (req, res) => {
     await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
     await msg.sendButtons(
       convo.sender_id,
-      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.Үлдэгдэл шалгах дата нэмэх бол чат руугаа үлдэгдэл гэж бичээрэй!`,
+      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.`,
       [
         { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
       ]
