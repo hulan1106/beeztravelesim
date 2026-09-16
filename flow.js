@@ -14,7 +14,7 @@ const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
-  "Russia": ["russia", "орос", "ru"],
+  "Russia": ["russia", "орос", "ru", "oros"],
   "Germany": ["germany", "герман", "de"],
   "United States": ["usa", "america", "америк", "us"],
   "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
