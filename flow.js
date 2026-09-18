@@ -51,7 +51,7 @@ const DISPLAY_NAMES = {
   "United Arab Emirates": "АНЭУ",
   "Georgia": "Гүрж",
   "Indonesia": "Индонез",
-   "Italy": "Итали",
+  "Italy": "Итали",
 };
 
 const USAGE_TRIGGERS = [
@@ -172,17 +172,48 @@ async function handleDaysReply(senderId, convo, text) {
     return true;
   }
 
-  // 1-2 days stays at the smallest available tier (e.g. 7). Anything above
-  // 2 days targets 30 days specifically (not the true max, which can run
-  // much higher for some destinations, e.g. 60/90/180). Falls back to the
-  // largest available duration if 30 isn't offered for this destination.
-  const smallest = available[0];
-  const preferredUpsell = available.includes(30)
-    ? 30
-    : available[available.length - 1];
-  const matchedDuration = days <= 2 ? smallest : preferredUpsell;
+  let plans;
+  let matchedDuration;
 
-  const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+  if (days <= 2) {
+    // For short trips, query all durations and filter to 3/5/10 GB options only.
+    // This lets short-trip customers see lightweight plans even though the DB
+    // stores them under longer duration tiers (e.g. 7-day bucket).
+    const SHORT_TRIP_GB = [3, 5, 10];
+    const allPlans = (
+      await Promise.all(
+        available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
+      )
+    ).flat();
+
+    // Deduplicate by GB size — keep the cheapest plan per GB tier.
+    const byGb = new Map();
+    for (const p of allPlans) {
+      const gb = Number(p.gb);
+      if (!SHORT_TRIP_GB.includes(gb)) continue;
+      if (!byGb.has(gb) || Number(p.price_mnt) < Number(byGb.get(gb).price_mnt)) {
+        byGb.set(gb, p);
+      }
+    }
+
+    plans = SHORT_TRIP_GB.map((gb) => byGb.get(gb)).filter(Boolean);
+
+    if (plans.length === 0) {
+      // Fall back to smallest duration if none of 3/5/10 GB exist for this destination.
+      matchedDuration = available[0];
+      plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+    } else {
+      // Use the duration of the first matched plan so AWAITING_PLAN state is consistent.
+      matchedDuration = plans[0].duration_days;
+    }
+  } else {
+    // >2 days: target 30-day tier, or largest available.
+    const preferredUpsell = available.includes(30)
+      ? 30
+      : available[available.length - 1];
+    matchedDuration = preferredUpsell;
+    plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+  }
 
   await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
   await msg.sendQuickReplies(
