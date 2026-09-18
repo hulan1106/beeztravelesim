@@ -179,7 +179,7 @@ async function handleDaysReply(senderId, convo, text) {
     // For short trips, query all durations and filter to 3/5/10 GB options only.
     // This lets short-trip customers see lightweight plans even though the DB
     // stores them under longer duration tiers (e.g. 7-day bucket).
-    const SHORT_TRIP_GB = [3, 5, 10];
+    const SHORT_TRIP_GB = [1, 3, 5, 10];
     const allPlans = (
       await Promise.all(
         available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
