@@ -282,7 +282,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоосыг browser-т хуулаад төлбөрөө төлнө үү /iPhone хэрэглэгч/:\n${invoice.url}`
+    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө:\n${invoice.url}`
   );
   return true;
 }
