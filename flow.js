@@ -285,7 +285,7 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendText(
     senderId,
-    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө:\n${invoice.url}`
+    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}`
   );
   return true;
 }
