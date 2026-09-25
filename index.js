@@ -5,6 +5,7 @@ const db = require("./db");
 const esimaccess = require("./esimaccess");
 const msg = require("./messenger");
 const flow = require("./flow");
+const bonum = require("./bonum");
 
 const app = express();
 app.use(express.json());
@@ -59,6 +60,31 @@ app.post("/webhook", async (req, res) => {
     }
   }
   res.status(200).send("EVENT_RECEIVED");
+});
+
+// --- TEMPORARY: Bonum test route ---
+// Creates one small real Bonum invoice and shows the followUpLink to open
+// manually, so we can see what payment options actually appear on Bonum's
+// hosted checkout page (specifically: is Apple Pay one of them?).
+// Remove this route once we've confirmed what we need to know.
+app.get("/bonum-test", async (req, res) => {
+  try {
+    const callbackUrl = `https://${req.get("host")}/bonum-test-callback`;
+    const transactionId = `bonum_test_${Date.now()}`;
+    const invoice = await bonum.createInvoice(1000, "Bonum test invoice", callbackUrl, transactionId);
+    res.status(200).send(`
+      <h2>Bonum test invoice created</h2>
+      <p>Invoice ID: ${invoice.invoiceId}</p>
+      <p><a href="${invoice.followUpLink}" target="_blank">Open the hosted payment page →</a></p>
+      <p>Raw URL: ${invoice.followUpLink}</p>
+    `);
+  } catch (err) {
+    console.error("Bonum test error:", err.response?.data || err.message);
+    res.status(500).send(`
+      <h2>Bonum test failed</h2>
+      <pre>${JSON.stringify(err.response?.data || err.message, null, 2)}</pre>
+    `);
+  }
 });
 
 // --- SAFARI ESCAPE PAGE (for iPhone users stuck in Messenger's in-app browser) ---
