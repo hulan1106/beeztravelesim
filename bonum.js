@@ -70,7 +70,7 @@ async function createInvoice(amountMnt, description, callbackUrl, transactionId)
       amount: amountMnt,
       callback: callbackUrl,
       transactionId,
-      items: [{ title: description, amount: amountMnt, count: 1 }],
+      items: [{ title: description, amount: amountMnt, count: 1, remark: description }],
     },
     { headers: { Authorization: `Bearer ${token}` } }
   );
