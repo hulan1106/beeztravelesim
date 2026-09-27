@@ -8,9 +8,7 @@ const flow = require("./flow");
 const bonum = require("./bonum");
 
 const app = express();
-app.use(express.json({
-  verify: (req, res, buf) => { req.rawBody = buf; },
-}));
+app.use(express.json());
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "beeztravel_verify";
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
@@ -212,109 +210,6 @@ app.post("/webhook/byl", async (req, res) => {
     // Direct tap-to-install links, no QR scanning needed. iOS 17.4+ and
     // Android 10+ support this — older devices should just use the QR code
     // above instead, which always works regardless of OS version.
-    if (profile.ac) {
-      const encodedAc = encodeURIComponent(profile.ac);
-      const iosInstallUrl = `https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
-      const androidInstallUrl = `https://esimsetup.android.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
-
-      await msg.sendButtons(
-        convo.sender_id,
-        "QR код уншуулахгүйгээр, доорх товчоор шууд суулгаж болно (iPhone 17.4+, Android 10+):",
-        [
-          { title: "📱 iPhone дээр суулгах", url: iosInstallUrl },
-          { title: "🤖 Android дээр суулгах", url: androidInstallUrl },
-        ]
-      );
-    }
-
-    await db.upsertConversation(convo.sender_id, { state: "DONE" });
-  } catch (err) {
-    console.error("eSIM provisioning failed:", err.response?.data || err.message);
-    await msg.sendText(
-      convo.sender_id,
-      "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
-    );
-  }
-});
-
-// --- Bonum PAYMENT WEBHOOK ---
-// Bonum's callback URL is set per-invoice (in flow.js), pointing back here.
-// Signature verification uses HMAC-SHA256 over the raw body — see bonum.js.
-app.post("/webhook/bonum", async (req, res) => {
-  res.status(200).send("OK"); // ack immediately, do the work after
-
-  const checksumHeader = req.headers["x-checksum-v2"];
-  const validSignature = bonum.verifyWebhookChecksum(req.rawBody, checksumHeader);
-  if (!validSignature) {
-    // TEMPORARY: log loudly but still proceed, in case the checksum key was
-    // copied with a stray space/newline — a wrong key here would otherwise
-    // silently block every real customer payment. Tighten this to reject
-    // once we've confirmed real webhooks are verifying correctly.
-    console.error("⚠️ Bonum webhook signature did NOT verify — proceeding anyway (temporary).");
-  }
-
-  const event = req.body;
-  console.log("[bonum webhook] full payload:", JSON.stringify(event));
-
-  if (event.type !== "PAYMENT" || event.status !== "SUCCESS") return;
-
-  // Defensive extraction — exact field name inside `body` wasn't confirmed
-  // from docs alone, so try the most likely candidates and log if none hit.
-  const transactionId =
-    event.body?.transactionId || event.body?.transaction_id || event.transactionId;
-
-  if (!transactionId) {
-    console.error("[bonum webhook] Could not find transactionId in payload — check the logged JSON above.");
-    return;
-  }
-
-  // Could be either a new eSIM purchase or a top-up — check top-ups first.
-  const topupOrder = await db.getTopupOrderByInvoiceId(transactionId);
-  if (topupOrder) {
-    await handleTopupPaid(topupOrder, transactionId);
-    return;
-  }
-
-  const convo = await db.getConversationByInvoiceId(transactionId);
-  if (!convo) {
-    console.warn("No conversation or topup order found for Bonum transactionId", transactionId);
-    return;
-  }
-
-  const plan = await db.getPlanById(convo.plan_id);
-  if (!plan) {
-    console.error("Plan missing for conversation", convo.sender_id);
-    return;
-  }
-
-  try {
-    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
-
-    const orderNo = await esimaccess.orderEsim({
-      packageCode: plan.slug,
-      transactionId: `beez_${transactionId}_${Date.now()}`,
-    });
-
-    await db.upsertConversation(convo.sender_id, { state: "PROVISIONING", order_no: orderNo });
-
-    const profile = await esimaccess.queryEsimProfile(orderNo);
-    if (!profile) {
-      await msg.sendText(
-        convo.sender_id,
-        "еСИМ бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
-      );
-      return;
-    }
-
-    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
-    await msg.sendButtons(
-      convo.sender_id,
-      `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.Үлдэгдэл шалгах дата нэмэх бол чат руугаа үлдэгдэл гэж бичээрэй!`,
-      [
-        { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
-      ]
-    );
-
     if (profile.ac) {
       const encodedAc = encodeURIComponent(profile.ac);
       const iosInstallUrl = `https://esimsetup.apple.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
