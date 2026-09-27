@@ -1,7 +1,10 @@
 const db = require("./db");
-const byl = require("./byl");
+const byl = require("./byl"); // kept for easy rollback — not actively called right now
+const bonum = require("./bonum");
 const msg = require("./messenger");
 const esimaccess = require("./esimaccess");
+
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
 
 // Maps what a customer types to the exact `destination` string in esim_plans
 // (must match the xlsx column verbatim). China has multiple listed products —
@@ -264,28 +267,29 @@ async function handlePlanChosen(senderId, planId) {
     return true;
   }
 
-  const invoice = await byl.createInvoice(
-    plan.price_mnt,
-    `Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног`
-  );
+  const description = `Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног`;
+  const transactionId = `beez_${plan.id}_${Date.now()}`;
+  const callbackUrl = `${PUBLIC_BASE_URL}/webhook/bonum`;
+
+  const invoice = await bonum.createInvoice(plan.price_mnt, description, callbackUrl, transactionId);
 
   await db.upsertConversation(senderId, {
     state: "AWAITING_PAYMENT",
     plan_id: plan.id,
-    invoice_id: String(invoice.id),
-    invoice_number: invoice.number,
+    invoice_id: transactionId, // what Bonum's webhook will echo back to us
+    invoice_number: invoice.invoiceId,
   });
 
   await msg.sendButton(
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
-    invoice.url,
-    "QPAY төлөх"
+    invoice.followUpLink,
+    "Төлбөр төлөх"
   );
 
   await msg.sendText(
     senderId,
-    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}`
+    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.followUpLink}`
   );
   return true;
 }
@@ -401,25 +405,26 @@ async function handleTopupPlanChosen(senderId, payload) {
   const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
   const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
 
-  const invoice = await byl.createInvoice(
-    priceMnt,
-    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
-  );
+  const description = `Beez eSIM Topup ${gb}GB - Order ${orderNo}`;
+  const transactionId = `topup_${iccid}_${Date.now()}`;
+  const callbackUrl = `${PUBLIC_BASE_URL}/webhook/bonum`;
 
-  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
+  const invoice = await bonum.createInvoice(priceMnt, description, callbackUrl, transactionId);
+
+  await db.createTopupOrder(senderId, transactionId, invoice.invoiceId, iccid, orderNo, packageCode, gb);
 
   await db.upsertConversation(senderId, { state: "IDLE" });
 
   await msg.sendButton(
     senderId,
     `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
-    invoice.url,
-    "QPAY төлөх"
+    invoice.followUpLink,
+    "Төлбөр төлөх"
   );
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.followUpLink}`
   );
   return true;
 }
