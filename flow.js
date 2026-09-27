@@ -3,7 +3,7 @@ const byl = require("./byl");
 const msg = require("./messenger");
 const esimaccess = require("./esimaccess");
 
-// Maps what a customer types to the exact destination string in esim_plans
+// Maps what a customer types to the exact `destination` string in esim_plans
 // (must match the xlsx column verbatim). China has multiple listed products —
 // "China mainland" is the plain single-country plan; the mainland+HK+Macao
 // and mainland+Japan+Korea bundles are separate products, deliberately not
@@ -14,7 +14,7 @@ const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
-  "Russia": ["russia", "орос", "ru", "oros"],
+  "Russia": ["russia", "орос", "ru"],
   "Germany": ["germany", "герман", "de"],
   "United States": ["usa", "america", "америк", "us"],
   "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
@@ -28,10 +28,9 @@ const DESTINATION_TRIGGERS = {
   "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират"],
   "Georgia": ["georgia", "гүрж", "ge"],
   "Indonesia": ["indonesia", "индонез", "id"],
-  "Italy": ["italy", "итали", "ital"],
 };
 
-// Display label used in bot replies — separate from the DB destination key
+// Display label used in bot replies — separate from the DB `destination` key
 // so DB values can read naturally in Mongolian to the customer.
 const DISPLAY_NAMES = {
   "China mainland": "Хятад",
@@ -51,7 +50,6 @@ const DISPLAY_NAMES = {
   "United Arab Emirates": "АНЭУ",
   "Georgia": "Гүрж",
   "Indonesia": "Индонез",
-  "Italy": "Итали",
 };
 
 const USAGE_TRIGGERS = [
@@ -63,11 +61,6 @@ const USAGE_TRIGGERS = [
   "дата нэмье",
   "check usage",
   "usage",
-  "үлдэгдэл",
-  "uldegdel",
-   "vldegdel",
-   "data",
-   "data nemeh",
 ];
 
 function matchDestination(text) {
@@ -100,7 +93,7 @@ async function handleMessage(senderId, text, payload) {
     const destinations = Object.values(DISPLAY_NAMES).join(", ");
     await msg.sendText(
       senderId,
-      Дахин эхэллээ 🔄 Аль улс руу явахаа сонгоно уу: ${destinations}
+      `Дахин эхэллээ 🔄 Аль улс руу явахаа сонгоно уу: ${destinations}`
     );
     return true;
   }
@@ -133,7 +126,7 @@ async function handleMessage(senderId, text, payload) {
     await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
     await msg.sendText(
       senderId,
-      ${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)
+      `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
     );
     return true;
   }
@@ -175,56 +168,25 @@ async function handleDaysReply(senderId, convo, text) {
     return true;
   }
 
-  let plans;
-  let matchedDuration;
+  // 1-2 days stays at the smallest available tier (e.g. 7). Anything above
+  // 2 days targets 30 days specifically (not the true max, which can run
+  // much higher for some destinations, e.g. 60/90/180). Falls back to the
+  // largest available duration if 30 isn't offered for this destination.
+  const smallest = available[0];
+  const preferredUpsell = available.includes(30)
+    ? 30
+    : available[available.length - 1];
+  const matchedDuration = days <= 2 ? smallest : preferredUpsell;
 
-  if (days <= 2) {
-    // For short trips, query all durations and filter to 3/5/10 GB options only.
-    // This lets short-trip customers see lightweight plans even though the DB
-    // stores them under longer duration tiers (e.g. 7-day bucket).
-    const SHORT_TRIP_GB = [1, 3, 5, 10];
-    const allPlans = (
-      await Promise.all(
-        available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
-      )
-    ).flat();
-
-    // Deduplicate by GB size — keep the cheapest plan per GB tier.
-    const byGb = new Map();
-    for (const p of allPlans) {
-      const gb = Number(p.gb);
-      if (!SHORT_TRIP_GB.includes(gb)) continue;
-      if (!byGb.has(gb) || Number(p.price_mnt) < Number(byGb.get(gb).price_mnt)) {
-        byGb.set(gb, p);
-      }
-    }
-
-    plans = SHORT_TRIP_GB.map((gb) => byGb.get(gb)).filter(Boolean);
-
-    if (plans.length === 0) {
-      // Fall back to smallest duration if none of 3/5/10 GB exist for this destination.
-      matchedDuration = available[0];
-      plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
-    } else {
-      // Use the duration of the first matched plan so AWAITING_PLAN state is consistent.
-      matchedDuration = plans[0].duration_days;
-    }
-  } else {
-    // >2 days: target 30-day tier, or largest available.
-    const preferredUpsell = available.includes(30)
-      ? 30
-      : available[available.length - 1];
-    matchedDuration = preferredUpsell;
-    plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
-  }
+  const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
 
   await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
   await msg.sendQuickReplies(
     senderId,
     "Дата хэмжээгээ сонгоно уу:",
     plans.map((p) => ({
-      title: ${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮,
-      payload: PLAN|${p.id},
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
     }))
   );
   return true;
@@ -250,8 +212,8 @@ async function handlePlanTextReply(senderId, convo, text) {
     senderId,
     "Уучлаарай, дээрх сонголтуудаас сонгоно уу:",
     plans.map((p) => ({
-      title: ${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮,
-      payload: PLAN|${p.id},
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
     }))
   );
   return true;
@@ -266,7 +228,7 @@ async function handlePlanChosen(senderId, planId) {
 
   const invoice = await byl.createInvoice(
     plan.price_mnt,
-    Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног
+    `Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног`
   );
 
   await db.upsertConversation(senderId, {
@@ -276,16 +238,19 @@ async function handlePlanChosen(senderId, planId) {
     invoice_number: invoice.number,
   });
 
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
+  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
+
   await msg.sendButton(
     senderId,
-    ${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:,
-    invoice.url,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
+    payUrl,
     "QPAY төлөх"
   );
 
   await msg.sendText(
     senderId,
-    iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
   return true;
 }
@@ -315,7 +280,7 @@ async function handleUsageOrderReply(senderId, text) {
   const remaining = Math.max(0, totalVolume - usedVolume);
 
   const usageText = totalVolume
-    ? ${esimaccess.formatBytes(usedVolume)} хэрэглэсэн / ${esimaccess.formatBytes(totalVolume)} нийт
+    ? `${esimaccess.formatBytes(usedVolume)} хэрэглэсэн / ${esimaccess.formatBytes(totalVolume)} нийт`
     : "—";
   const remainText = totalVolume ? esimaccess.formatBytes(remaining) : "—";
 
@@ -327,10 +292,10 @@ async function handleUsageOrderReply(senderId, text) {
 
   await msg.sendText(
     senderId,
-    📶 Захиалга: ${orderNo}
+    `📶 Захиалга: ${orderNo}
 Дуусах хугацаа: ${expiredTime}
 Хэрэглээ: ${usageText}
-Үлдэгдэл: ${remainText}
+Үлдэгдэл: ${remainText}`
   );
 
   await msg.sendQuickReplies(senderId, "Дата нэмэх үү?", [
@@ -372,8 +337,8 @@ async function handleTopupYes(senderId, convo) {
       const gb = (Number(p.volume) / 1073741824).toFixed(0);
       const priceMnt = esimaccess.topupPriceToMnt(Number(p.price));
       return {
-        title: ${gb} GB - ${priceMnt.toLocaleString()}₮,
-        payload: TOPUPPLAN|${p.packageCode}|${convo.iccid}|${convo.order_no},
+        title: `${gb} GB - ${priceMnt.toLocaleString()}₮`,
+        payload: `TOPUPPLAN|${p.packageCode}|${convo.iccid}|${convo.order_no}`,
       };
     })
   );
@@ -403,23 +368,26 @@ async function handleTopupPlanChosen(senderId, payload) {
 
   const invoice = await byl.createInvoice(
     priceMnt,
-    Beez eSIM Topup ${gb}GB - Order ${orderNo}
+    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
   );
 
   await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
+
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
+  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
 
   await db.upsertConversation(senderId, { state: "IDLE" });
 
   await msg.sendButton(
     senderId,
-    ${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:,
-    invoice.url,
+    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
+    payUrl,
     "QPAY төлөх"
   );
 
   await msg.sendText(
     senderId,
-    Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
   return true;
 }
