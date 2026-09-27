@@ -387,7 +387,11 @@ async function handleTopupPlanChosen(senderId, payload) {
 
   await msg.sendText(
     senderId,
-    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+    `Банк: Худалдаа хөгжлийн банк 
+Нэр: Хулан 
+Данс: 416075929
+IBAN: MN270004000416075929
+Гүйлгээний утга: нэр:\n${invoice.url}`
   );
   return true;
 }
