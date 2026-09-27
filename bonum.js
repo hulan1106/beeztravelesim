@@ -62,7 +62,7 @@ async function getAccessToken() {
 // Creates a Bonum invoice and returns { invoiceId, followUpLink }.
 // followUpLink is the hosted checkout page — send the customer here, same
 // role as byl.mn's invoice.url.
-async function createInvoice(amountMnt, description, callbackUrl, transactionId, expiresInSeconds = 86400) {
+async function createInvoice(amountMnt, description, callbackUrl, transactionId, expiresInSeconds = 3600) {
   const token = await getAccessToken();
   const res = await axios.post(
     `${BONUM_BASE_URL}/bonum-gateway/ecommerce/invoices`,
