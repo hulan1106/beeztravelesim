@@ -172,11 +172,8 @@ async function handleDaysReply(senderId, convo, text) {
   // 2 days targets 30 days specifically (not the true max, which can run
   // much higher for some destinations, e.g. 60/90/180). Falls back to the
   // largest available duration if 30 isn't offered for this destination.
-  const smallest = available[0];
-  const preferredUpsell = available.includes(30)
-    ? 30
-    : available[available.length - 1];
-  const matchedDuration = days <= 2 ? smallest : preferredUpsell;
+const matchedDuration =
+  available.find((d) => d >= days) ?? available[available.length - 1];
 
   const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
 
