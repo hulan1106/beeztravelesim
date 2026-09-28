@@ -61,6 +61,8 @@ const USAGE_TRIGGERS = [
   "дата нэмье",
   "check usage",
   "usage",
+  "үлдэгдэл",
+  "uldegdel",
 ];
 
 function matchDestination(text) {
