@@ -14,7 +14,7 @@ const DESTINATION_TRIGGERS = {
   "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
   "South Korea": ["korea", "солонгос", "kr", "solongos"],
   "Japan": ["japan", "япон", "jp", "yapon"],
-  "Russia": ["russia", "орос", "ru"],
+  "Russia": ["russia", "орос", "ru", "oros"],
   "Germany": ["germany", "герман", "de"],
   "United States": ["usa", "america", "америк", "us"],
   "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
@@ -28,7 +28,7 @@ const DESTINATION_TRIGGERS = {
   "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират"],
   "Georgia": ["georgia", "гүрж", "ge"],
   "Indonesia": ["indonesia", "индонез", "id"],
-  "India": ["india", "энэтхэг", "in"],
+  "Italy": ["italy", "итали", "ital"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
@@ -51,6 +51,8 @@ const DISPLAY_NAMES = {
   "United Arab Emirates": "АНЭУ",
   "Georgia": "Гүрж",
   "Indonesia": "Индонез",
+  "Italy": "Итали",
+    "India": "Энэтхэг",
 };
 
 const USAGE_TRIGGERS = [
@@ -64,6 +66,9 @@ const USAGE_TRIGGERS = [
   "usage",
   "үлдэгдэл",
   "uldegdel",
+   "vldegdel",
+   "data",
+   "data nemeh",
 ];
 
 function matchDestination(text) {
@@ -119,6 +124,22 @@ async function handleMessage(senderId, text, payload) {
     return true;
   }
 
+  if (payload && payload.startsWith("PAY_QPAY_PLAN|")) {
+    return proceedWithQpayPlan(senderId, Number(payload.split("|")[1]));
+  }
+
+  if (payload && payload.startsWith("PAY_BANK_PLAN|")) {
+    return sendBankTransferForPlan(senderId, Number(payload.split("|")[1]));
+  }
+
+  if (payload && payload.startsWith("PAY_QPAY_TOPUP|")) {
+    return proceedWithQpayTopup(senderId, payload.replace("PAY_QPAY_TOPUP|", ""));
+  }
+
+  if (payload && payload.startsWith("PAY_BANK_TOPUP|")) {
+    return sendBankTransferForTopup(senderId, payload.replace("PAY_BANK_TOPUP|", ""));
+  }
+
   // Recognized trigger words always interrupt whatever step the customer is
   // currently on — e.g. typing "хятад" while the bot is waiting for an order
   // number should switch to buying a plan, not get swallowed as an invalid
@@ -171,17 +192,48 @@ async function handleDaysReply(senderId, convo, text) {
     return true;
   }
 
-  // 1-2 days stays at the smallest available tier (e.g. 7). Anything above
-  // 2 days targets 30 days specifically (not the true max, which can run
-  // much higher for some destinations, e.g. 60/90/180). Falls back to the
-  // largest available duration if 30 isn't offered for this destination.
-  const smallest = available[0];
-  const preferredUpsell = available.includes(30)
-    ? 30
-    : available[available.length - 1];
-  const matchedDuration = days <= 0 ? smallest : preferredUpsell;
+  let plans;
+  let matchedDuration;
 
-  const plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+  if (days <= 2) {
+    // For short trips, query all durations and filter to 3/5/10 GB options only.
+    // This lets short-trip customers see lightweight plans even though the DB
+    // stores them under longer duration tiers (e.g. 7-day bucket).
+    const SHORT_TRIP_GB = [1, 3, 5, 10];
+    const allPlans = (
+      await Promise.all(
+        available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
+      )
+    ).flat();
+
+    // Deduplicate by GB size — keep the cheapest plan per GB tier.
+    const byGb = new Map();
+    for (const p of allPlans) {
+      const gb = Number(p.gb);
+      if (!SHORT_TRIP_GB.includes(gb)) continue;
+      if (!byGb.has(gb) || Number(p.price_mnt) < Number(byGb.get(gb).price_mnt)) {
+        byGb.set(gb, p);
+      }
+    }
+
+    plans = SHORT_TRIP_GB.map((gb) => byGb.get(gb)).filter(Boolean);
+
+    if (plans.length === 0) {
+      // Fall back to smallest duration if none of 3/5/10 GB exist for this destination.
+      matchedDuration = available[0];
+      plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+    } else {
+      // Use the duration of the first matched plan so AWAITING_PLAN state is consistent.
+      matchedDuration = plans[0].duration_days;
+    }
+  } else {
+    // >2 days: target 30-day tier, or largest available.
+    const preferredUpsell = available.includes(30)
+      ? 30
+      : available[available.length - 1];
+    matchedDuration = preferredUpsell;
+    plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+  }
 
   await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
   await msg.sendQuickReplies(
@@ -222,7 +274,33 @@ async function handlePlanTextReply(senderId, convo, text) {
   return true;
 }
 
+// --- BANK TRANSFER (manual, no automated confirmation) ---
+const BANK_TRANSFER_INFO = {
+  bankName: "Худалдаа хөгжлийн банк",
+  accountNumber: "416075929",
+  accountName: "Хулан",
+  iban: "MN270004000416075929",
+};
+
 async function handlePlanChosen(senderId, planId) {
+  const plan = await db.getPlanById(planId);
+  if (!plan) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  await msg.sendButtons(
+    senderId,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Хэрхэн төлөх вэ?`,
+    [
+      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY_PLAN|${plan.id}` },
+      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK_PLAN|${plan.id}` },
+    ]
+  );
+  return true;
+}
+
+async function proceedWithQpayPlan(senderId, planId) {
   const plan = await db.getPlanById(planId);
   if (!plan) {
     await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
@@ -241,23 +319,39 @@ async function handlePlanChosen(senderId, planId) {
     invoice_number: invoice.number,
   });
 
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
-  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
-
   await msg.sendButton(
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
-    payUrl,
+    invoice.url,
     "QPAY төлөх"
   );
 
   await msg.sendText(
     senderId,
-    `Банк: Худалдаа хөгжлийн банк 
-Нэр: Хулан 
-Данс: 416075929
-IBAN: MN270004000416075929
-Гүйлгээний утга: нэр:\n${invoice.url}`
+    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}`
+  );
+  return true;
+}
+
+async function sendBankTransferForPlan(senderId, planId) {
+  const plan = await db.getPlanById(planId);
+  if (!plan) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const productName = `${DISPLAY_NAMES[plan.destination] || plan.destination} eSIM ${plan.gb}GB / ${plan.duration_days} хоног`;
+
+  await msg.sendText(
+    senderId,
+    `${productName}\n\n` +
+      `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
+      `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
+      `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
+      `Гүйлгээний утга: Имэйл хаяг\n` +
+      `Дүн: ₮${Number(plan.price_mnt).toLocaleString()}\n` +
+      `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
+      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа QR кодыг энд илгээх болно.`
   );
   return true;
 }
@@ -353,52 +447,91 @@ async function handleTopupYes(senderId, convo) {
 }
 
 async function handleTopupPlanChosen(senderId, payload) {
-  const [, packageCode, iccid, orderNo] = payload.split("|");
+  const rest = payload.replace("TOPUPPLAN|", "");
+  await msg.sendButtons(
+    senderId,
+    "Хэрхэн төлөх вэ?",
+    [
+      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY_TOPUP|${rest}` },
+      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK_TOPUP|${rest}` },
+    ]
+  );
+  return true;
+}
 
-  let packages;
+async function getTopupPackageInfo(rest) {
+  const [packageCode, iccid, orderNo] = rest.split("|");
+  const packages = await esimaccess.listTopupPackages(iccid);
+  const pkg = packages.find((p) => p.packageCode === packageCode);
+  if (!pkg) return null;
+  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
+  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
+  return { packageCode, iccid, orderNo, gb, priceMnt };
+}
+
+async function proceedWithQpayTopup(senderId, rest) {
+  let info;
   try {
-    packages = await esimaccess.listTopupPackages(iccid);
+    info = await getTopupPackageInfo(rest);
   } catch (err) {
     console.error("listTopupPackages error:", err.message);
     await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
     return true;
   }
-
-  const pkg = packages.find((p) => p.packageCode === packageCode);
-  if (!pkg) {
+  if (!info) {
     await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
     return true;
   }
 
-  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
-  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
-
   const invoice = await byl.createInvoice(
-    priceMnt,
-    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
+    info.priceMnt,
+    `Beez eSIM Topup ${info.gb}GB - Order ${info.orderNo}`
   );
 
-  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
-
-  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://beeztravelesim-production.up.railway.app";
-  const payUrl = `${PUBLIC_BASE_URL}/pay-redirect?url=${encodeURIComponent(invoice.url)}`;
+  await db.createTopupOrder(senderId, invoice.id, invoice.number, info.iccid, info.orderNo, info.packageCode, info.gb);
 
   await db.upsertConversation(senderId, { state: "IDLE" });
 
   await msg.sendButton(
     senderId,
-    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
-    payUrl,
+    `${info.gb} GB нэмэх — ${info.priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
+    invoice.url,
     "QPAY төлөх"
   );
 
   await msg.sendText(
     senderId,
-    `Банк: Худалдаа хөгжлийн банк 
-Нэр: Хулан 
-Данс: 416075929
-IBAN: MN270004000416075929
-Гүйлгээний утга: нэр:\n${invoice.url}`
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
+  return true;
+}
+
+async function sendBankTransferForTopup(senderId, rest) {
+  let info;
+  try {
+    info = await getTopupPackageInfo(rest);
+  } catch (err) {
+    console.error("listTopupPackages error:", err.message);
+    await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
+    return true;
+  }
+  if (!info) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  await db.upsertConversation(senderId, { state: "IDLE" });
+
+  await msg.sendText(
+    senderId,
+    `Дата нэмэх ${info.gb}GB - Захиалга ${info.orderNo}\n\n` +
+      `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
+      `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
+      `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
+      `Гүйлгээний утга: Имэйл хаяг\n` +
+      `Дүн: ₮${info.priceMnt.toLocaleString()}\n` +
+      `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
+      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа дата нэмэгдэнэ.`
   );
   return true;
 }
