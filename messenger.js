@@ -40,7 +40,7 @@ function sendButton(recipientId, text, url, buttonTitle) {
   });
 }
 
-// buttons: [{ title, url }] — supports multiple buttons under one message
+// buttons: [{ title, url }] for links, or [{ title, payload }] for postback buttons
 function sendButtons(recipientId, text, buttons) {
   return send(recipientId, {
     attachment: {
@@ -48,12 +48,11 @@ function sendButtons(recipientId, text, buttons) {
       payload: {
         template_type: "button",
         text,
-        buttons: buttons.map((b) => ({
-          type: "web_url",
-          url: b.url,
-          title: b.title,
-          webview_height_ratio: "full",
-        })),
+        buttons: buttons.map((b) =>
+          b.payload
+            ? { type: "postback", title: b.title, payload: b.payload }
+            : { type: "web_url", url: b.url, title: b.title, webview_height_ratio: "full" }
+        ),
       },
     },
   });
