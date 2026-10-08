@@ -293,7 +293,7 @@ async function handlePlanChosen(senderId, planId) {
     senderId,
     `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Хэрхэн төлөх вэ?`,
     [
-      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY_PLAN|${plan.id}` },
+      { title: "Банкны аппаар төлөх", payload: `PAY_QPAY_PLAN|${plan.id}` },
       { title: "Дансаар шилжүүлэх", payload: `PAY_BANK_PLAN|${plan.id}` },
     ]
   );
