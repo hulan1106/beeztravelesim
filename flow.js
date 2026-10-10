@@ -52,7 +52,6 @@ const DISPLAY_NAMES = {
   "Georgia": "Гүрж",
   "Indonesia": "Индонез",
   "Italy": "Итали",
-    "India": "Энэтхэг",
 };
 
 const USAGE_TRIGGERS = [
@@ -122,22 +121,6 @@ async function handleMessage(senderId, text, payload) {
     await db.upsertConversation(senderId, { state: "IDLE" });
     await msg.sendText(senderId, "Ойлголоо 👍 Өөр асуух зүйл байвал бичээрэй.");
     return true;
-  }
-
-  if (payload && payload.startsWith("PAY_QPAY_PLAN|")) {
-    return proceedWithQpayPlan(senderId, Number(payload.split("|")[1]));
-  }
-
-  if (payload && payload.startsWith("PAY_BANK_PLAN|")) {
-    return sendBankTransferForPlan(senderId, Number(payload.split("|")[1]));
-  }
-
-  if (payload && payload.startsWith("PAY_QPAY_TOPUP|")) {
-    return proceedWithQpayTopup(senderId, payload.replace("PAY_QPAY_TOPUP|", ""));
-  }
-
-  if (payload && payload.startsWith("PAY_BANK_TOPUP|")) {
-    return sendBankTransferForTopup(senderId, payload.replace("PAY_BANK_TOPUP|", ""));
   }
 
   // Recognized trigger words always interrupt whatever step the customer is
@@ -274,33 +257,7 @@ async function handlePlanTextReply(senderId, convo, text) {
   return true;
 }
 
-// --- BANK TRANSFER (manual, no automated confirmation) ---
-const BANK_TRANSFER_INFO = {
-  bankName: "Худалдаа хөгжлийн банк",
-  accountNumber: "416075929",
-  accountName: "Хулан",
-  iban: "MN270004000416075929",
-};
-
 async function handlePlanChosen(senderId, planId) {
-  const plan = await db.getPlanById(planId);
-  if (!plan) {
-    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
-    return true;
-  }
-
-  await msg.sendButtons(
-    senderId,
-    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Хэрхэн төлөх вэ?`,
-    [
-      { title: "Банкны аппаар төлөх", payload: `PAY_QPAY_PLAN|${plan.id}` },
-      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK_PLAN|${plan.id}` },
-    ]
-  );
-  return true;
-}
-
-async function proceedWithQpayPlan(senderId, planId) {
   const plan = await db.getPlanById(planId);
   if (!plan) {
     await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
@@ -329,29 +286,6 @@ async function proceedWithQpayPlan(senderId, planId) {
   await msg.sendText(
     senderId,
     `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}`
-  );
-  return true;
-}
-
-async function sendBankTransferForPlan(senderId, planId) {
-  const plan = await db.getPlanById(planId);
-  if (!plan) {
-    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
-    return true;
-  }
-
-  const productName = `${DISPLAY_NAMES[plan.destination] || plan.destination} eSIM ${plan.gb}GB / ${plan.duration_days} хоног`;
-
-  await msg.sendText(
-    senderId,
-    `${productName}\n\n` +
-      `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
-      `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
-      `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
-      `Гүйлгээний утга: Имэйл хаяг\n` +
-      `Дүн: ₮${Number(plan.price_mnt).toLocaleString()}\n` +
-      `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
-      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа QR кодыг энд илгээх болно.`
   );
   return true;
 }
@@ -447,54 +381,38 @@ async function handleTopupYes(senderId, convo) {
 }
 
 async function handleTopupPlanChosen(senderId, payload) {
-  const rest = payload.replace("TOPUPPLAN|", "");
-  await msg.sendButtons(
-    senderId,
-    "Хэрхэн төлөх вэ?",
-    [
-      { title: "QPAY-ээр төлөх", payload: `PAY_QPAY_TOPUP|${rest}` },
-      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK_TOPUP|${rest}` },
-    ]
-  );
-  return true;
-}
+  const [, packageCode, iccid, orderNo] = payload.split("|");
 
-async function getTopupPackageInfo(rest) {
-  const [packageCode, iccid, orderNo] = rest.split("|");
-  const packages = await esimaccess.listTopupPackages(iccid);
-  const pkg = packages.find((p) => p.packageCode === packageCode);
-  if (!pkg) return null;
-  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
-  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
-  return { packageCode, iccid, orderNo, gb, priceMnt };
-}
-
-async function proceedWithQpayTopup(senderId, rest) {
-  let info;
+  let packages;
   try {
-    info = await getTopupPackageInfo(rest);
+    packages = await esimaccess.listTopupPackages(iccid);
   } catch (err) {
     console.error("listTopupPackages error:", err.message);
     await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
     return true;
   }
-  if (!info) {
+
+  const pkg = packages.find((p) => p.packageCode === packageCode);
+  if (!pkg) {
     await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
     return true;
   }
 
+  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
+  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
+
   const invoice = await byl.createInvoice(
-    info.priceMnt,
-    `Beez eSIM Topup ${info.gb}GB - Order ${info.orderNo}`
+    priceMnt,
+    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
   );
 
-  await db.createTopupOrder(senderId, invoice.id, invoice.number, info.iccid, info.orderNo, info.packageCode, info.gb);
+  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
 
   await db.upsertConversation(senderId, { state: "IDLE" });
 
   await msg.sendButton(
     senderId,
-    `${info.gb} GB нэмэх — ${info.priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
+    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
     invoice.url,
     "QPAY төлөх"
   );
@@ -502,36 +420,6 @@ async function proceedWithQpayTopup(senderId, rest) {
   await msg.sendText(
     senderId,
     `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
-  );
-  return true;
-}
-
-async function sendBankTransferForTopup(senderId, rest) {
-  let info;
-  try {
-    info = await getTopupPackageInfo(rest);
-  } catch (err) {
-    console.error("listTopupPackages error:", err.message);
-    await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
-    return true;
-  }
-  if (!info) {
-    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
-    return true;
-  }
-
-  await db.upsertConversation(senderId, { state: "IDLE" });
-
-  await msg.sendText(
-    senderId,
-    `Дата нэмэх ${info.gb}GB - Захиалга ${info.orderNo}\n\n` +
-      `Банк: ${BANK_TRANSFER_INFO.bankName}\n` +
-      `Дансны дугаар: ${BANK_TRANSFER_INFO.accountNumber}\n` +
-      `Дансны нэр: ${BANK_TRANSFER_INFO.accountName}\n` +
-      `Гүйлгээний утга: Имэйл хаяг\n` +
-      `Дүн: ₮${info.priceMnt.toLocaleString()}\n` +
-      `IBAN: ${BANK_TRANSFER_INFO.iban}\n\n` +
-      `Шилжүүлгийн утга дээр имэйл хаягаа бичнэ үү. Төлбөр батлагдсаны дараа дата нэмэгдэнэ.`
   );
   return true;
 }
