@@ -285,7 +285,11 @@ async function handlePlanChosen(senderId, planId) {
 
   await msg.sendText(
     senderId,
-    `iPhone хэрэглэгч холбоосыг хуулаад Safari-д нээж төлбөрөө төлнө. Төлбөр төлөгдмөгц таны чатанд QR очих болно:\n${invoice.url}`
+    `Банк: Худалдаа хөгжлийн банк 
+Нэр: Хулан 
+Данс: 416075929
+IBAN: MN270004000416075929
+Гүйлгээний утга: утасны дугаар\n${invoice.url}`
   );
   return true;
 }
