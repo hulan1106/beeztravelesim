@@ -29,6 +29,7 @@ const DESTINATION_TRIGGERS = {
   "Georgia": ["georgia", "гүрж", "ge"],
   "Indonesia": ["indonesia", "индонез", "id"],
   "Italy": ["italy", "итали", "ital"],
+  "India": ["india", "энэтхэг", "india"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
