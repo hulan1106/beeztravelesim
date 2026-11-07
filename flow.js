@@ -143,7 +143,7 @@ async function handleMessage(senderId, text, payload) {
     await db.upsertConversation(senderId, { state: "AWAITING_USAGE_ORDER" });
     await msg.sendText(
       senderId,
-      "Захиалгын дугаараа бичнэ үү (жишээ нь: B26020700440027)"
+      "Захиалгын дугаараа бичнэ үү (жишээ нь: B2602*********)"
     );
     return true;
   }
