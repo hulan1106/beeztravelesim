@@ -143,7 +143,7 @@ async function askCountry(senderId) {
 async function sendMainMenu(senderId, text) {
   await msg.sendQuickReplies(
     senderId,
-    text || "Сайн байна уу! 🐝 Beez Travel eSIM-д тавтай морил. Таны хүсэж буй зүйлээ сонгоно уу:",
+    text || "Сайн байна уу! 🐝 Beez Travel eSIM-д тавтай морил. Та сонголтоо хийнэ үү:",
     [
       { title: "🛒 Шинэ eSIM авах", payload: "BUY_NEW" },
       { title: "📶 Үлдэгдэл шалгах", payload: "CHECK_BALANCE" },
