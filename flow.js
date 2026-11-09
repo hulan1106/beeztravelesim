@@ -133,7 +133,7 @@ async function askCountry(senderId) {
   const countries = Object.values(DISPLAY_NAMES).join(", ");
   await msg.sendText(
     senderId,
-    `Та аль улс руу явах вэ? 🌍\nУлсын нэрийг бичнэ үү (жишээ нь: Хятад, Солонгос, Япон).\n\nБоломжит улсууд: ${countries}`
+    `Та аль улс руу явах вэ? 🌍\nУлсын нэрийг бичнэ үү (жишээ нь: Хятад, Солонгос, Япон).}`
   );
 }
 
