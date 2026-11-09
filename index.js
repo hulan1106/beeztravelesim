@@ -49,14 +49,15 @@ app.post("/webhook", async (req, res) => {
       try {
         const handled = await flow.handleMessage(senderId, text, quickReplyPayload);
         if (handled) continue;
+
+        // Anything not recognized by the purchase flow gets the main menu:
+        // [Шинэ eSIM авах] [Үлдэгдэл шалгах]
+        await flow.sendMainMenu(senderId);
       } catch (err) {
         console.error("flow error:", err.response?.data || err.message);
         await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Түр хүлээгээд дахин оролдоно уу.");
         continue;
       }
-
-      // Anything not recognized by the purchase flow is now simply ignored
-      // (fallback menu removed).
     }
   }
   res.status(200).send("EVENT_RECEIVED");
