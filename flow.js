@@ -11,25 +11,50 @@ const esimaccess = require("./esimaccess");
 // (e.g. "USA & Canada", "Australia & New Zealand") — deliberately left out
 // so triggers only match the single-country plans.
 const DESTINATION_TRIGGERS = {
-  "China mainland": ["china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad"],
-  "South Korea": ["korea", "солонгос", "kr", "solongos"],
-  "Japan": ["japan", "япон", "jp", "yapon"],
-  "Russia": ["russia", "орос", "ru", "oros"],
-  "Germany": ["germany", "герман", "de"],
-  "United States": ["usa", "america", "америк", "us"],
-  "Kazakhstan": ["kazakhstan", "казахстан", "kz"],
-  "Thailand": ["thailand", "тайланд", "th"],
-  "Turkey": ["turkey", "turkiye", "турк", "tr"],
-  "Vietnam": ["vietnam", "вьетнам", "vn"],
-  "Canada": ["canada", "канад", "ca"],
-  "Qatar": ["qatar", "катар", "qa"],
-  "Czech Republic": ["czech", "чех", "cz"],
-  "Australia": ["australia", "австрали", "au"],
-  "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират"],
-  "Georgia": ["georgia", "гүрж", "ge"],
-  "Indonesia": ["indonesia", "индонез", "id"],
-  "Italy": ["italy", "итали", "ital"],
-  "India": ["india", "энэтхэг", "india"],
+  "China mainland": [
+    "china", "хятад", "cn", "hyatad", "hytad", "khyatad", "khytad",
+    // cities
+    "beijing", "peking", "бээжин", "beejin", "shanghai", "шанхай",
+    "guangzhou", "гуанжоу", "shenzhen", "шэньжэнь", "chengdu", "чэнду",
+    "hangzhou", "хангжоу", "xian", "сиань", "эрээн", "erenhot", "erlian",
+  ],
+  "South Korea": [
+    "korea", "солонгос", "kr", "solongos",
+    "seoul", "сөүл", "busan", "пусан", "jeju", "чэжү",
+  ],
+  "Japan": [
+    "japan", "япон", "jp", "yapon",
+    "tokyo", "токио", "osaka", "осака", "kyoto", "киото",
+  ],
+  "Russia": [
+    "russia", "орос", "ru", "oros",
+    "moscow", "москва", "irkutsk", "иркутск", "ulan-ude", "улаан-үд",
+    "petersburg", "петербург",
+  ],
+  "Germany": [
+    "germany", "герман", "de",
+    "berlin", "берлин", "munich", "мюнхен", "frankfurt", "франкфурт",
+  ],
+  "United States": [
+    "usa", "america", "америк", "us",
+    "new york", "нью-йорк", "los angeles", "лос анжелес", "chicago", "чикаго",
+  ],
+  "Kazakhstan": ["kazakhstan", "казахстан", "kz", "almaty", "алматы", "astana", "астана"],
+  "Thailand": [
+    "thailand", "тайланд", "th",
+    "bangkok", "бангкок", "phuket", "пхукет", "pattaya", "паттайа",
+  ],
+  "Turkey": ["turkey", "turkiye", "турк", "tr", "istanbul", "стамбул", "ankara", "анкара"],
+  "Vietnam": ["vietnam", "вьетнам", "vn", "hanoi", "ханой"],
+  "Canada": ["canada", "канад", "ca", "toronto", "торонто", "vancouver", "ванкувер"],
+  "Qatar": ["qatar", "катар", "qa", "doha", "доха"],
+  "Czech Republic": ["czech", "чех", "cz", "prague", "прага"],
+  "Australia": ["australia", "австрали", "au", "sydney", "сидней", "melbourne", "мельбурн"],
+  "United Arab Emirates": ["uae", "dubai", "дубай", "арабын нэгдсэн эмират", "abu dhabi", "абу даби"],
+  "Georgia": ["georgia", "гүрж", "ge", "tbilisi", "тбилиси"],
+  "Indonesia": ["indonesia", "индонез", "id", "bali", "бали", "jakarta", "жакарта"],
+  "Italy": ["italy", "итали", "ital", "rome", "милан", "milan"],
+  "India": ["india", "энэтхэг", "delhi", "дели", "mumbai", "мумбай"],
 };
 
 // Display label used in bot replies — separate from the DB `destination` key
@@ -71,21 +96,54 @@ const USAGE_TRIGGERS = [
    "data nemeh",
 ];
 
+// Greetings / "start" words. These ALWAYS show the main menu and reset the
+// conversation, even if the customer was stuck on another step.
+const GREETING_TRIGGERS = [
+  "hi", "hello", "hey", "hii", "helo", "menu", "start", "help",
+  "сайн уу", "сайн байна уу", "сайнуу", "сайн байна уу?", "sain uu", "sainuu",
+  "sain baina uu", "ehleh", "эхлэх", "эхлэе", "цэс", "меню", "тусламж",
+];
+
+function isGreeting(text) {
+  const t = (text || "").trim().toLowerCase().replace(/[!?.,]+$/g, "").trim();
+  return GREETING_TRIGGERS.includes(t);
+}
+
 function matchDestination(text) {
   const t = (text || "").trim().toLowerCase();
+  if (!t) return null;
+
+  // 1) Exact match (works for short codes like "kr", "us", "cn").
   for (const [destination, triggers] of Object.entries(DESTINATION_TRIGGERS)) {
     if (triggers.includes(t)) return destination;
   }
+
+  // 2) Match inside a longer sentence, e.g. "Beijing руу явна" or "i go to china".
+  //    Only triggers with 4+ characters are used here, so short codes
+  //    ("us", "de", "id") can't match by accident inside other words.
+  for (const [destination, triggers] of Object.entries(DESTINATION_TRIGGERS)) {
+    if (triggers.some((k) => k.length >= 4 && t.includes(k))) return destination;
+  }
+
   return null;
+}
+
+// Asks the customer which country they're travelling to.
+async function askCountry(senderId) {
+  const countries = Object.values(DISPLAY_NAMES).join(", ");
+  await msg.sendText(
+    senderId,
+    `Та аль улс руу явах вэ? 🌍\nУлсын нэрийг бичнэ үү (жишээ нь: Хятад, Солонгос, Япон).\n\nБоломжит улсууд: ${countries}`
+  );
 }
 
 // --- MAIN MENU (two buttons) ---
 // Shown when a customer messages and the bot doesn't recognize the text.
 // Quick-reply titles must stay under 20 characters.
-async function sendMainMenu(senderId) {
+async function sendMainMenu(senderId, text) {
   await msg.sendQuickReplies(
     senderId,
-    "Сайн байна уу! 🐝 Beez Travel eSIM-д тавтай морил. Таны хүсэж буй зүйлээ сонгоно уу:",
+    text || "Сайн байна уу! 🐝 Beez Travel eSIM-д тавтай морил. Таны хүсэж буй зүйлээ сонгоно уу:",
     [
       { title: "🛒 Шинэ eSIM авах", payload: "BUY_NEW" },
       { title: "📶 Үлдэгдэл шалгах", payload: "CHECK_BALANCE" },
@@ -120,14 +178,17 @@ async function handleMessage(senderId, text, payload) {
     return true;
   }
 
+  // Greeting / menu words always bring up the buttons and clear any stuck step.
+  if (isGreeting(text)) {
+    await db.upsertConversation(senderId, { state: "IDLE" });
+    await sendMainMenu(senderId);
+    return true;
+  }
+
   // Main menu button: buy a new eSIM
   if (payload === "BUY_NEW") {
-    await db.upsertConversation(senderId, { state: "IDLE" });
-    const destinations = Object.values(DISPLAY_NAMES).join(", ");
-    await msg.sendText(
-      senderId,
-      `Аль улс руу явахаа бичнэ үү: ${destinations}`
-    );
+    await db.upsertConversation(senderId, { state: "AWAITING_COUNTRY" });
+    await askCountry(senderId);
     return true;
   }
 
@@ -180,6 +241,15 @@ async function handleMessage(senderId, text, payload) {
       senderId,
       "Захиалгын дугаараа бичнэ үү (жишээ нь: B2602*********)"
     );
+    return true;
+  }
+
+  if (state === "AWAITING_COUNTRY") {
+    await msg.sendText(
+      senderId,
+      `Уучлаарай, "${(text || "").trim()}" гэсэн улсыг олсонгүй 😕 Хот бичсэн бол улсынх нь нэрийг бичээрэй.`
+    );
+    await askCountry(senderId);
     return true;
   }
 
@@ -333,9 +403,12 @@ IBAN: MN270004000416075929
 // --- USAGE CHECK + TOP-UP FLOW ---
 
 async function handleUsageOrderReply(senderId, text) {
-  const orderNo = (text || "").trim().toUpperCase();
-  if (!orderNo || orderNo.length < 6) {
-    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B26020700440027)");
+  const orderNo = (text || "").replace(/\s+/g, "").toUpperCase();
+  if (!/^[A-Z]\d{8,}$/.test(orderNo)) {
+    await sendMainMenu(
+      senderId,
+      "Захиалгын дугаар таарсангүй 😕 Дугаараа дахин бичнэ үү (жишээ нь: B26020700440027), эсвэл доороос сонгоно уу:"
+    );
     return true;
   }
 
