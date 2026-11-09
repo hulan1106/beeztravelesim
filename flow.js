@@ -300,7 +300,7 @@ IBAN: MN270004000416075929
 async function handleUsageOrderReply(senderId, text) {
   const orderNo = (text || "").trim().toUpperCase();
   if (!orderNo || orderNo.length < 6) {
-    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B26020700440027)");
+    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B2602**********)");
     return true;
   }
 
