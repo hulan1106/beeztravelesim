@@ -235,9 +235,29 @@ app.post("/webhook/byl", async (req, res) => {
   }
 });
 
+// --- TOP-UP HELPERS ---
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Returns { total, remaining } in bytes for an order, or null if not found.
+async function getRemainingBytes(orderNo) {
+  const esim = await esimaccess.queryEsimByOrderNo(orderNo);
+  if (!esim) return null;
+  const total = Number(esim.totalVolume || 0);
+  const used = Number(esim.orderUsage || 0);
+  return { total, remaining: Math.max(0, total - used) };
+}
+
 async function handleTopupPaid(topupOrder, invoiceId) {
   try {
     await db.markTopupOrderPaid(invoiceId);
+
+    // Snapshot balance before the top-up so we can verify/fallback afterwards.
+    let before = null;
+    try {
+      before = await getRemainingBytes(topupOrder.order_no);
+    } catch (e) {
+      console.warn("Pre-topup usage lookup failed:", e.message);
+    }
 
     // Re-fetch the current live price right before calling topup — eSIM
     // Access rejects stale prices, same lesson learned from ordering.
@@ -254,9 +274,38 @@ async function handleTopupPaid(topupOrder, invoiceId) {
       amount: Number(pkg.price),
     });
 
+    // Work out the new balance (remaining / total). Poll briefly until the
+    // provider's total grows; otherwise estimate from old numbers + added GB.
+    let balanceLine = "";
+    try {
+      let after = null;
+      for (let i = 0; i < 4; i++) {
+        await sleep(2000);
+        after = await getRemainingBytes(topupOrder.order_no);
+        if (after && (!before || after.total > before.total)) break;
+      }
+
+      let balance = null; // { remaining, total }
+      if (after && (!before || after.total > before.total)) {
+        balance = after;
+      } else if (before) {
+        const addedBytes = Number(topupOrder.gb) * 1073741824;
+        balance = {
+          remaining: before.remaining + addedBytes,
+          total: before.total + addedBytes,
+        };
+      }
+
+      if (balance) {
+        balanceLine = `\nШинэ үлдэгдэл: ${esimaccess.formatBytes(balance.remaining)} / ${esimaccess.formatBytes(balance.total)}`;
+      }
+    } catch (e) {
+      console.warn("Post-topup usage lookup failed:", e.message);
+    }
+
     await msg.sendText(
       topupOrder.sender_id,
-      `Дата амжилттай нэмэгдлээ! 🎉\nЗахиалга: ${topupOrder.order_no}\nНэмэгдсэн: ${topupOrder.gb} GB\nШинэ дуусах хугацаа: ${result.expiredTime || "—"}`
+      `Дата амжилттай нэмэгдлээ! 🎉\nЗахиалга: ${topupOrder.order_no}\nНэмэгдсэн: ${topupOrder.gb} GB${balanceLine}\nШинэ дуусах хугацаа: ${result.expiredTime || "—"}`
     );
   } catch (err) {
     console.error("Topup failed:", err.response?.data || err.message);
