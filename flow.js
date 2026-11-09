@@ -79,6 +79,20 @@ function matchDestination(text) {
   return null;
 }
 
+// --- MAIN MENU (two buttons) ---
+// Shown when a customer messages and the bot doesn't recognize the text.
+// Quick-reply titles must stay under 20 characters.
+async function sendMainMenu(senderId) {
+  await msg.sendQuickReplies(
+    senderId,
+    "Сайн байна уу! 🐝 Beez Travel eSIM-д тавтай морил. Таны хүсэж буй зүйлээ сонгоно уу:",
+    [
+      { title: "🛒 Шинэ eSIM авах", payload: "BUY_NEW" },
+      { title: "📶 Үлдэгдэл шалгах", payload: "CHECK_BALANCE" },
+    ]
+  );
+}
+
 // Returns true if this message was handled by the purchase flow — caller
 // should skip the generic menu fallback in that case.
 async function handleMessage(senderId, text, payload) {
@@ -102,6 +116,27 @@ async function handleMessage(senderId, text, payload) {
     await msg.sendText(
       senderId,
       `Дахин эхэллээ 🔄 Аль улс руу явахаа сонгоно уу: ${destinations}`
+    );
+    return true;
+  }
+
+  // Main menu button: buy a new eSIM
+  if (payload === "BUY_NEW") {
+    await db.upsertConversation(senderId, { state: "IDLE" });
+    const destinations = Object.values(DISPLAY_NAMES).join(", ");
+    await msg.sendText(
+      senderId,
+      `Аль улс руу явахаа бичнэ үү: ${destinations}`
+    );
+    return true;
+  }
+
+  // Main menu button: check balance / top up
+  if (payload === "CHECK_BALANCE") {
+    await db.upsertConversation(senderId, { state: "AWAITING_USAGE_ORDER" });
+    await msg.sendText(
+      senderId,
+      "Захиалгын дугаараа бичнэ үү (жишээ нь: B2602*********)"
     );
     return true;
   }
@@ -300,7 +335,7 @@ IBAN: MN270004000416075929
 async function handleUsageOrderReply(senderId, text) {
   const orderNo = (text || "").trim().toUpperCase();
   if (!orderNo || orderNo.length < 6) {
-    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B2602**********)");
+    await msg.sendText(senderId, "Захиалгын дугаараа зөв бичнэ үү (жишээ нь: B26020700440027)");
     return true;
   }
 
@@ -429,4 +464,4 @@ async function handleTopupPlanChosen(senderId, payload) {
   return true;
 }
 
-module.exports = { handleMessage, matchDestination, DISPLAY_NAMES };
+module.exports = { handleMessage, matchDestination, sendMainMenu, DISPLAY_NAMES };
