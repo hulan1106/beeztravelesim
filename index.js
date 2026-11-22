@@ -6,6 +6,7 @@ const esimaccess = require("./esimaccess");
 const msg = require("./messenger");
 const flow = require("./flow");
 const bonum = require("./bonum");
+const bank = require("./esimbank");
 
 const app = express();
 app.use(express.json());
@@ -40,6 +41,20 @@ app.post("/webhook", async (req, res) => {
 
       if (senderId === pageId) continue;
       if (event.message && event.message.is_echo) continue;
+
+      // A photo (not a sticker/like button) may be a bank-transfer receipt.
+      // Not awaited: reading it takes a few seconds and Messenger expects a fast reply.
+      const imageAttachment = event.message?.attachments?.find(
+        (a) => a.type === "image" && !a.payload?.sticker_id
+      );
+      if (imageAttachment) {
+        if (!bank.seenBefore(event.message.mid)) {
+          bank
+            .handleScreenshot({ senderId, imageUrl: imageAttachment.payload.url })
+            .catch((err) => console.error("handleScreenshot error:", err.response?.data || err.message));
+        }
+        continue;
+      }
 
       const text = event.message?.text || "";
       const quickReplyPayload = event.message?.quick_reply?.payload || event.postback?.payload || null;
@@ -148,6 +163,29 @@ app.get("/pay-redirect", (req, res) => {
 </html>`);
 });
 
+// --- BANK DEPOSIT WEBHOOK (called by the Gmail Apps Script) ---
+const BANK_WEBHOOK_SECRET = process.env.BANK_WEBHOOK_SECRET;
+
+app.post("/webhook/bank", async (req, res) => {
+  if (!BANK_WEBHOOK_SECRET) return res.status(503).send("BANK_WEBHOOK_SECRET not set");
+  if (req.get("x-bank-secret") !== BANK_WEBHOOK_SECRET) return res.sendStatus(401);
+
+  const { id, amount, receivedAt } = req.body || {};
+  if (!id || !Number.isFinite(Number(amount)) || !Number.isFinite(Number(receivedAt))) {
+    return res.sendStatus(400);
+  }
+
+  res.status(200).send("OK");
+
+  try {
+    await bank.onDeposit({ id: String(id), amount: Number(amount), receivedAt: Number(receivedAt) });
+  } catch (err) {
+    console.error("onDeposit error:", err.response?.data || err.message);
+  }
+});
+
+bank.init({ provision: provisionEsim });
+
 // --- byl.mn PAYMENT WEBHOOK ---
 // Configure this URL (https://<your-railway-domain>/webhook/byl) as the
 // project webhook in the byl.mn dashboard, subscribed to invoice.paid.
@@ -180,28 +218,33 @@ app.post("/webhook/byl", async (req, res) => {
     return;
   }
 
+  await provisionEsim(convo.sender_id, plan, `beez_${invoice.id}_${Date.now()}`);
+});
+
+// Sends a paid eSIM to the customer. Used by both byl (QPay) and bank-transfer payments.
+async function provisionEsim(senderId, plan, transactionKey) {
   try {
-    await msg.sendText(convo.sender_id, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
+    await msg.sendText(senderId, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
 
     const orderNo = await esimaccess.orderEsim({
       packageCode: plan.slug,
-      transactionId: `beez_${invoice.id}_${Date.now()}`,
+      transactionId: transactionKey,
     });
 
-    await db.upsertConversation(convo.sender_id, { state: "PROVISIONING", order_no: orderNo });
+    await db.upsertConversation(senderId, { state: "PROVISIONING", order_no: orderNo });
 
     const profile = await esimaccess.queryEsimProfile(orderNo);
     if (!profile) {
       await msg.sendText(
-        convo.sender_id,
+        senderId,
         "еСИМ бэлдэгдэж байна, 1-2 минутын дараа дахин шалгаарай эсвэл манай тусламжийн багтай холбогдоно уу."
       );
       return;
     }
 
-    await msg.sendImage(convo.sender_id, profile.qrCodeUrl);
+    await msg.sendImage(senderId, profile.qrCodeUrl);
     await msg.sendButtons(
-      convo.sender_id,
+      senderId,
       `Таны еСИМ бэлэн боллоо! 🎉\nЗахиалгын дугаар: ${orderNo}\n\nQR кодыг уншуулж, еСИМээ идэвхжүүлээрэй.Үлдэгдэл шалгах дата нэмэх бол чат руугаа үлдэгдэл гэж бичээрэй!`,
       [
         { title: "Суулгах заавар", url: "https://esim.beez.mn/how-to-install-travel-esim/" },
@@ -217,7 +260,7 @@ app.post("/webhook/byl", async (req, res) => {
       const androidInstallUrl = `https://esimsetup.android.com/esim_qrcode_provisioning?carddata=${encodedAc}`;
 
       await msg.sendButtons(
-        convo.sender_id,
+        senderId,
         "QR код уншуулахгүйгээр, доорх товчоор шууд суулгаж болно (iPhone 17.4+, Android 10+):",
         [
           { title: "📱 iPhone дээр суулгах", url: iosInstallUrl },
@@ -226,15 +269,15 @@ app.post("/webhook/byl", async (req, res) => {
       );
     }
 
-    await db.upsertConversation(convo.sender_id, { state: "DONE" });
+    await db.upsertConversation(senderId, { state: "DONE" });
   } catch (err) {
     console.error("eSIM provisioning failed:", err.response?.data || err.message);
     await msg.sendText(
-      convo.sender_id,
+      senderId,
       "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
     );
   }
-});
+}
 
 // --- TOP-UP HELPERS ---
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
