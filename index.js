@@ -184,7 +184,7 @@ app.post("/webhook/bank", async (req, res) => {
   }
 });
 
-bank.init({ provision: provisionEsim });
+bank.init({ provision: provisionEsim, topup: (topupOrder, key) => applyTopup(topupOrder, key) });
 
 // --- byl.mn PAYMENT WEBHOOK ---
 // Configure this URL (https://<your-railway-domain>/webhook/byl) as the
@@ -291,10 +291,21 @@ async function getRemainingBytes(orderNo) {
   return { total, remaining: Math.max(0, total - used) };
 }
 
+// A byl (QPay) top-up invoice was paid.
 async function handleTopupPaid(topupOrder, invoiceId) {
   try {
     await db.markTopupOrderPaid(invoiceId);
+  } catch (err) {
+    console.error("markTopupOrderPaid failed:", err.message);
+  }
+  await applyTopup(topupOrder, `topup_${invoiceId}_${Date.now()}`);
+}
 
+// Adds the data to the eSIM and tells the customer. Used by both byl (QPay)
+// and bank-transfer top-ups. topupOrder needs: sender_id, order_no, iccid,
+// package_code, gb.
+async function applyTopup(topupOrder, transactionKey) {
+  try {
     // Snapshot balance before the top-up so we can verify/fallback afterwards.
     let before = null;
     try {
@@ -314,7 +325,7 @@ async function handleTopupPaid(topupOrder, invoiceId) {
     const result = await esimaccess.topupEsim({
       iccid: topupOrder.iccid,
       packageCode: topupOrder.package_code,
-      transactionId: `topup_${invoiceId}_${Date.now()}`,
+      transactionId: transactionKey,
       amount: Number(pkg.price),
     });
 
