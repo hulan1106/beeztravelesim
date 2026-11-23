@@ -203,6 +203,14 @@ async function handleMessage(senderId, text, payload) {
     return true;
   }
 
+  if (payload && payload.startsWith("PAY_QPAY|")) {
+    return handlePayQpay(senderId, Number(payload.split("|")[1]));
+  }
+
+  if (payload && payload.startsWith("PAY_BANK|")) {
+    return handlePayBank(senderId, Number(payload.split("|")[1]));
+  }
+
   if (payload && payload.startsWith("PLAN|")) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
   }
@@ -371,6 +379,34 @@ async function handlePlanChosen(senderId, planId) {
     return true;
   }
 
+  // No invoice and no order code yet — they are created only for the payment
+  // method the customer actually chooses.
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_PAYMENT",
+    plan_id: plan.id,
+    invoice_id: null,
+    invoice_number: null,
+  });
+
+  await msg.sendButtons(
+    senderId,
+    `${plan.gb} GB / ${plan.duration_days} хоног — ${Number(plan.price_mnt).toLocaleString()}₮. Хэрхэн төлөх вэ?`,
+    [
+      { title: "QPAY төлөх", payload: `PAY_QPAY|${plan.id}` },
+      { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${plan.id}` },
+    ]
+  );
+  return true;
+}
+
+// Customer chose QPAY: create the byl invoice now and send the payment link.
+async function handlePayQpay(senderId, planId) {
+  const plan = await db.getPlanById(planId);
+  if (!plan) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
   const invoice = await byl.createInvoice(
     plan.price_mnt,
     `Beez eSIM ${DISPLAY_NAMES[plan.destination] || plan.destination} ${plan.gb}GB / ${plan.duration_days} хоног`
@@ -390,31 +426,38 @@ async function handlePlanChosen(senderId, planId) {
     "QPAY төлөх"
   );
 
-  // Bank transfer: give the customer a unique order code to put in the transfer note.
-  let bankCode = null;
-  try {
-    bankCode = await bank.createBankOrder(senderId, plan);
-  } catch (err) {
-    console.error("createBankOrder error:", err.message);
+  await msg.sendText(
+    senderId,
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
+
+  // Bottom button: for customers whose QPAY did not work.
+  await msg.sendQuickReplies(senderId, "QPAY ажиллахгүй байна уу?", [
+    { title: "Дансаар шилжүүлэх", payload: `PAY_BANK|${plan.id}` },
+  ]);
+  return true;
+}
+
+// Customer chose bank transfer: give them a unique order code for the transfer note.
+async function handlePayBank(senderId, planId) {
+  const plan = await db.getPlanById(planId);
+  if (!plan) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
   }
 
-  if (bankCode) {
-    await msg.sendText(
-      senderId,
-      `Дансаар шилжүүлэх бол:\n` +
-        `Банк: Худалдаа хөгжлийн банк\n` +
-        `Нэр: Хулан\n` +
-        `Данс: 416075929\n` +
-        `IBAN: MN270004000416075929\n` +
-        `Дүн: ${Number(plan.price_mnt).toLocaleString()}₮\n` +
-        `Гүйлгээний утга: ${bankCode}\n\n` +
-        `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц еСИМ автоматаар ирнэ.`
-    );
-  }
+  const bankCode = await bank.createBankOrder(senderId, plan);
 
   await msg.sendText(
     senderId,
-    `Хэрэв QPAY товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+    `Дансаар шилжүүлэх:\n` +
+      `Банк: Худалдаа хөгжлийн банк\n` +
+      `Нэр: Хулан\n` +
+      `Данс: 416075929\n` +
+      `IBAN: MN270004000416075929\n` +
+      `Дүн: ${Number(plan.price_mnt).toLocaleString()}₮\n` +
+      `Гүйлгээний утга: ${bankCode}\n\n` +
+      `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц еСИМ автоматаар ирнэ.`
   );
   return true;
 }
