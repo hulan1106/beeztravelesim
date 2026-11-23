@@ -1,7 +1,7 @@
 // Bank-transfer payments for the eSIM bot, verified against real TDB deposit emails.
 //
 // Flow:
-//  - When a customer picks a plan, createBankOrder() gives them a unique code (ESIM-12345)
+//  - When a customer picks a plan, createBankOrder() gives them a unique 5-digit code (e.g. 12345)
 //    to write in the transfer note.
 //  - The Gmail Apps Script posts each real TDB deposit to /webhook/bank   -> onDeposit
 //  - The customer sends a screenshot of the transfer                      -> handleScreenshot
@@ -67,12 +67,12 @@ function init(ctx) {
 
 // ---------- order codes ----------
 
-// Called from flow.js when the customer picks a plan. Returns e.g. "ESIM-48213".
+// Called from flow.js when the customer picks a plan. Returns e.g. "48213".
 async function createBankOrder(senderId, plan) {
   await ready;
   const amount = Math.round(Number(plan.price_mnt));
   for (let i = 0; i < 20; i++) {
-    const code = "ESIM-" + String(Math.floor(10000 + Math.random() * 90000));
+    const code = String(Math.floor(10000 + Math.random() * 90000)); // digits only, e.g. 48213
     const r = await db.pool.query(
       `INSERT INTO bank_orders (code, sender_id, plan_id, amount)
        VALUES ($1, $2, $3, $4)
@@ -85,9 +85,10 @@ async function createBankOrder(senderId, plan) {
   throw new Error("could not allocate an order code");
 }
 
-function findCode(note) {
-  const m = String(note || "").match(/ESIM[\s\-_:]*(\d{5})/i);
-  return m ? `ESIM-${m[1]}` : null;
+// Every standalone 5-digit number in the note (not part of a longer number such
+// as a phone number). One of them should be the customer's order code.
+function findCodes(note) {
+  return String(note || "").match(/(?<!\d)\d{5}(?!\d)/g) || [];
 }
 
 // ---------- screenshot reading (Claude vision) ----------
@@ -292,8 +293,8 @@ async function handleScreenshot({ senderId, imageUrl }) {
 
   // Which order? Prefer the code written in the transfer note, otherwise match by amount.
   const amount = Number(receipt.amount_mnt);
-  const noteCode = findCode(receipt.transaction_note);
-  let order = noteCode ? openOrders.find((o) => o.code === noteCode) : null;
+  const noteCodes = findCodes(receipt.transaction_note);
+  let order = openOrders.find((o) => noteCodes.includes(o.code)) || null;
   if (!order) order = openOrders.find((o) => Number(o.amount) === amount);
 
   if (!order || Number(order.amount) !== amount) {
