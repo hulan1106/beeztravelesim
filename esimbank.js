@@ -31,6 +31,7 @@ const MAX_RECEIPT_AGE_MS = Number(process.env.MAX_RECEIPT_AGE_MIN || 60) * MIN; 
 const WAIT_MINUTES = 60; // how long an order waits for its bank email
 
 let provision = null; // async (senderId, plan, transactionKey) => sends the eSIM
+let topup = null; // async (topupOrder, transactionKey) => adds data to an existing eSIM
 let ready = Promise.resolve();
 
 async function ensureTables() {
@@ -57,10 +58,15 @@ async function ensureTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  // Top-up support: an order is either a new eSIM (plan_id) or a data top-up (extra).
+  await db.pool.query(`ALTER TABLE bank_orders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'ESIM'`);
+  await db.pool.query(`ALTER TABLE bank_orders ADD COLUMN IF NOT EXISTS extra JSONB`);
+  await db.pool.query(`ALTER TABLE bank_orders ALTER COLUMN plan_id DROP NOT NULL`);
 }
 
 function init(ctx) {
   provision = ctx.provision;
+  topup = ctx.topup;
   ready = ensureTables();
   ready.catch((e) => console.error("[bank] table setup failed:", e.message));
 }
@@ -68,21 +74,44 @@ function init(ctx) {
 // ---------- order codes ----------
 
 // Called from flow.js when the customer picks a plan. Returns e.g. "48213".
-async function createBankOrder(senderId, plan) {
+async function insertOrder(senderId, { kind, planId, amount, extra }) {
   await ready;
-  const amount = Math.round(Number(plan.price_mnt));
   for (let i = 0; i < 20; i++) {
     const code = String(Math.floor(10000 + Math.random() * 90000)); // digits only, e.g. 48213
     const r = await db.pool.query(
-      `INSERT INTO bank_orders (code, sender_id, plan_id, amount)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO bank_orders (code, sender_id, plan_id, amount, kind, extra)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)
        ON CONFLICT (code) DO NOTHING
        RETURNING code`,
-      [code, senderId, plan.id, amount]
+      [code, senderId, planId, amount, kind, extra ? JSON.stringify(extra) : null]
     );
     if (r.rows[0]) return code;
   }
   throw new Error("could not allocate an order code");
+}
+
+// New eSIM purchase.
+function createBankOrder(senderId, plan) {
+  return insertOrder(senderId, {
+    kind: "ESIM",
+    planId: plan.id,
+    amount: Math.round(Number(plan.price_mnt)),
+  });
+}
+
+// Data top-up for an existing eSIM. topup = { amountMnt, iccid, orderNo, packageCode, gb }
+function createBankTopupOrder(senderId, topupInfo) {
+  return insertOrder(senderId, {
+    kind: "TOPUP",
+    planId: null,
+    amount: Math.round(Number(topupInfo.amountMnt)),
+    extra: {
+      iccid: topupInfo.iccid,
+      order_no: topupInfo.orderNo,
+      package_code: topupInfo.packageCode,
+      gb: topupInfo.gb,
+    },
+  });
 }
 
 // Every standalone 5-digit number in the note (not part of a longer number such
@@ -225,18 +254,23 @@ async function tryResolve(code) {
     client.release();
   }
 
-  // Paid -> send the eSIM.
+  // Paid -> send the eSIM, or add the data for a top-up.
   try {
-    const plan = await db.getPlanById(order.plan_id);
-    if (!plan) throw new Error(`plan ${order.plan_id} not found`);
-    await provision(order.sender_id, plan, `beez_bank_${order.code}`);
+    if (order.kind === "TOPUP") {
+      await msg.sendText(order.sender_id, "Төлбөр хүлээн авлаа ✅ Дата нэмж байна...");
+      await topup({ sender_id: order.sender_id, ...order.extra }, `topup_bank_${order.code}_${Date.now()}`);
+    } else {
+      const plan = await db.getPlanById(order.plan_id);
+      if (!plan) throw new Error(`plan ${order.plan_id} not found`);
+      await provision(order.sender_id, plan, `beez_bank_${order.code}`);
+    }
   } catch (e) {
     console.error("[bank] delivery failed:", e.response?.data || e.message);
-    await notifyOwner(`Bank payment matched but eSIM delivery failed: ${order.code} (${order.amount} MNT).`);
+    await notifyOwner(`Bank payment matched but delivery failed: ${order.code} (${order.amount} MNT, ${order.kind}).`);
     try {
       await msg.sendText(
         order.sender_id,
-        "еСИМ үүсгэхэд алдаа гарлаа. Манай тусламжийн баг тантай удахгүй холбогдоно."
+        "Төлбөр хүлээн авсан ч үйлдэл амжилтгүй боллоо. Манай тусламжийн баг тантай удахгүй холбогдоно."
       );
     } catch {}
   }
@@ -352,4 +386,4 @@ async function onDeposit({ id, amount, receivedAt }) {
   }
 }
 
-module.exports = { init, createBankOrder, handleScreenshot, onDeposit, seenBefore };
+module.exports = { init, createBankOrder, createBankTopupOrder, handleScreenshot, onDeposit, seenBefore };
