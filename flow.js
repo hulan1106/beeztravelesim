@@ -215,6 +215,14 @@ async function handleMessage(senderId, text, payload) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
   }
 
+  if (payload && payload.startsWith("TOPUPQPAY|")) {
+    return handleTopupQpay(senderId, payload);
+  }
+
+  if (payload && payload.startsWith("TOPUPBANK|")) {
+    return handleTopupBank(senderId, payload);
+  }
+
   if (payload && payload.startsWith("TOPUPPLAN|")) {
     return handleTopupPlanChosen(senderId, payload);
   }
@@ -555,39 +563,68 @@ async function handleTopupYes(senderId, convo) {
   return true;
 }
 
-async function handleTopupPlanChosen(senderId, payload) {
-  const [, packageCode, iccid, orderNo] = payload.split("|");
-
+// Looks up the live price of a top-up package. Returns { gb, priceMnt } or null
+// (after telling the customer something went wrong).
+async function lookupTopupPackage(senderId, iccid, packageCode) {
   let packages;
   try {
     packages = await esimaccess.listTopupPackages(iccid);
   } catch (err) {
     console.error("listTopupPackages error:", err.message);
     await msg.sendText(senderId, "Уучлаарай, алдаа гарлаа. Дахин оролдоно уу.");
-    return true;
+    return null;
   }
 
   const pkg = packages.find((p) => p.packageCode === packageCode);
   if (!pkg) {
     await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
-    return true;
+    return null;
   }
 
-  const gb = (Number(pkg.volume) / 1073741824).toFixed(0);
-  const priceMnt = esimaccess.topupPriceToMnt(Number(pkg.price));
+  return {
+    gb: (Number(pkg.volume) / 1073741824).toFixed(0),
+    priceMnt: esimaccess.topupPriceToMnt(Number(pkg.price)),
+  };
+}
 
-  const invoice = await byl.createInvoice(
-    priceMnt,
-    `Beez eSIM Topup ${gb}GB - Order ${orderNo}`
-  );
+// Customer picked a top-up package: ask how they want to pay.
+// Nothing is created yet — the invoice / bank order is made for the chosen method only.
+async function handleTopupPlanChosen(senderId, payload) {
+  const [, packageCode, iccid, orderNo] = payload.split("|");
 
-  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, gb);
+  const info = await lookupTopupPackage(senderId, iccid, packageCode);
+  if (!info) return true;
 
   await db.upsertConversation(senderId, { state: "IDLE" });
 
+  await msg.sendButtons(
+    senderId,
+    `${info.gb} GB нэмэх — ${info.priceMnt.toLocaleString()}₮. Хэрхэн төлөх вэ?`,
+    [
+      { title: "QPAY төлөх", payload: `TOPUPQPAY|${packageCode}|${iccid}|${orderNo}` },
+      { title: "Дансаар шилжүүлэх", payload: `TOPUPBANK|${packageCode}|${iccid}|${orderNo}` },
+    ]
+  );
+  return true;
+}
+
+// Top-up paid with QPAY: create the byl invoice now.
+async function handleTopupQpay(senderId, payload) {
+  const [, packageCode, iccid, orderNo] = payload.split("|");
+
+  const info = await lookupTopupPackage(senderId, iccid, packageCode);
+  if (!info) return true;
+
+  const invoice = await byl.createInvoice(
+    info.priceMnt,
+    `Beez eSIM Topup ${info.gb}GB - Order ${orderNo}`
+  );
+
+  await db.createTopupOrder(senderId, invoice.id, invoice.number, iccid, orderNo, packageCode, info.gb);
+
   await msg.sendButton(
     senderId,
-    `${gb} GB нэмэх — ${priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
+    `${info.gb} GB нэмэх — ${info.priceMnt.toLocaleString()}₮. Төлбөрөө төлж дараа нь автоматаар нэмэгдэнэ:`,
     invoice.url,
     "QPAY төлөх"
   );
@@ -595,6 +632,40 @@ async function handleTopupPlanChosen(senderId, payload) {
   await msg.sendText(
     senderId,
     `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
+
+  // Bottom button: for customers whose QPAY did not work.
+  await msg.sendQuickReplies(senderId, "QPAY ажиллахгүй байна уу?", [
+    { title: "Дансаар шилжүүлэх", payload: `TOPUPBANK|${packageCode}|${iccid}|${orderNo}` },
+  ]);
+  return true;
+}
+
+// Top-up paid by bank transfer: give the customer a unique order code for the note.
+async function handleTopupBank(senderId, payload) {
+  const [, packageCode, iccid, orderNo] = payload.split("|");
+
+  const info = await lookupTopupPackage(senderId, iccid, packageCode);
+  if (!info) return true;
+
+  const bankCode = await bank.createBankTopupOrder(senderId, {
+    amountMnt: info.priceMnt,
+    iccid,
+    orderNo,
+    packageCode,
+    gb: info.gb,
+  });
+
+  await msg.sendText(
+    senderId,
+    `Дансаар шилжүүлэх (${info.gb} GB дата нэмэх):\n` +
+      `Банк: Худалдаа хөгжлийн банк\n` +
+      `Нэр: Хулан\n` +
+      `Данс: 416075929\n` +
+      `IBAN: MN270004000416075929\n` +
+      `Дүн: ${info.priceMnt.toLocaleString()}₮\n` +
+      `Гүйлгээний утга: ${bankCode}\n\n` +
+      `Гүйлгээний утга дээр ${bankCode} кодыг заавал бичнэ үү. Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц дата автоматаар нэмэгдэнэ.`
   );
   return true;
 }
