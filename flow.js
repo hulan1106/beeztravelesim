@@ -2,6 +2,7 @@ const db = require("./db");
 const byl = require("./byl");
 const msg = require("./messenger");
 const esimaccess = require("./esimaccess");
+const bank = require("./esimbank");
 
 // Maps what a customer types to the exact `destination` string in esim_plans
 // (must match the xlsx column verbatim). China has multiple listed products —
@@ -389,13 +390,31 @@ async function handlePlanChosen(senderId, planId) {
     "QPAY төлөх"
   );
 
+  // Bank transfer: give the customer a unique order code to put in the transfer note.
+  let bankCode = null;
+  try {
+    bankCode = await bank.createBankOrder(senderId, plan);
+  } catch (err) {
+    console.error("createBankOrder error:", err.message);
+  }
+
+  if (bankCode) {
+    await msg.sendText(
+      senderId,
+      `Дансаар шилжүүлэх бол:\n` +
+        `Банк: Худалдаа хөгжлийн банк\n` +
+        `Нэр: Хулан\n` +
+        `Данс: 416075929\n` +
+        `IBAN: MN270004000416075929\n` +
+        `Дүн: ${Number(plan.price_mnt).toLocaleString()}₮\n` +
+        `Гүйлгээний утга: ${bankCode}\n\n` +
+        `Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц еСИМ автоматаар ирнэ.`
+    );
+  }
+
   await msg.sendText(
     senderId,
-    `Банк: Худалдаа хөгжлийн банк 
-Нэр: Хулан 
-Данс: 416075929
-IBAN: MN270004000416075929
-Гүйлгээний утга: утасны дугаар\n${invoice.url}`
+    `Хэрэв QPAY товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
   );
   return true;
 }
