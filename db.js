@@ -38,6 +38,16 @@ async function getPlanById(id) {
 }
 
 // --- conversation state ---
+//
+// Daily plans (2 GB/day, 5 GB/day) are remembered in three extra columns:
+//   daily_code      eSIM Access package code of the chosen daily plan
+//   daily_days      number of days the customer chose
+//   daily_price_mnt total price in MNT
+// These columns must exist (run the ALTER TABLE once in Railway Postgres):
+//   ALTER TABLE conversations
+//     ADD COLUMN IF NOT EXISTS daily_code TEXT,
+//     ADD COLUMN IF NOT EXISTS daily_days INTEGER,
+//     ADD COLUMN IF NOT EXISTS daily_price_mnt INTEGER;
 
 async function getConversation(senderId) {
   const { rows } = await query(`SELECT * FROM conversations WHERE sender_id = $1`, [senderId]);
@@ -49,8 +59,9 @@ async function upsertConversation(senderId, fields) {
   const merged = { ...(existing || {}), ...fields, sender_id: senderId };
   await query(
     `INSERT INTO conversations
-       (sender_id, state, destination, duration_days, plan_id, invoice_id, invoice_number, order_no, iccid, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+       (sender_id, state, destination, duration_days, plan_id, invoice_id, invoice_number, order_no, iccid,
+        daily_code, daily_days, daily_price_mnt, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
      ON CONFLICT (sender_id) DO UPDATE SET
        state = EXCLUDED.state,
        destination = EXCLUDED.destination,
@@ -60,6 +71,9 @@ async function upsertConversation(senderId, fields) {
        invoice_number = EXCLUDED.invoice_number,
        order_no = EXCLUDED.order_no,
        iccid = EXCLUDED.iccid,
+       daily_code = EXCLUDED.daily_code,
+       daily_days = EXCLUDED.daily_days,
+       daily_price_mnt = EXCLUDED.daily_price_mnt,
        updated_at = now()`,
     [
       senderId,
@@ -71,6 +85,9 @@ async function upsertConversation(senderId, fields) {
       merged.invoice_number || null,
       merged.order_no || null,
       merged.iccid || null,
+      merged.daily_code || null,
+      merged.daily_days || null,
+      merged.daily_price_mnt || null,
     ]
   );
 }
