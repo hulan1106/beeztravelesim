@@ -212,16 +212,38 @@ app.post("/webhook/byl", async (req, res) => {
     return;
   }
 
-  const plan = await db.getPlanById(convo.plan_id);
-  if (!plan) {
-    console.error("Plan missing for conversation", convo.sender_id);
-    return;
+  let plan;
+  if (convo.daily_code) {
+    // Daily plan (2 GB/day, 5 GB/day): the plan comes from the DAILY_PLANS table in
+    // esimaccess.js, and periodNum = the number of days the customer chose.
+    const daily = esimaccess.getDailyPlanByCode(convo.daily_code);
+    const days = Number(convo.daily_days);
+    if (!daily || !days) {
+      console.error("Daily plan details missing for conversation", convo.sender_id);
+      return;
+    }
+    plan = {
+      id: null,
+      slug: daily.code,
+      destination: daily.destination,
+      gb: daily.gb,
+      duration_days: days,
+      price_mnt: Number(convo.daily_price_mnt),
+      periodNum: days,
+    };
+  } else {
+    plan = await db.getPlanById(convo.plan_id);
+    if (!plan) {
+      console.error("Plan missing for conversation", convo.sender_id);
+      return;
+    }
   }
 
   await provisionEsim(convo.sender_id, plan, `beez_${invoice.id}_${Date.now()}`);
 });
 
 // Sends a paid eSIM to the customer. Used by both byl (QPay) and bank-transfer payments.
+// `plan.periodNum` is only set for daily plans (number of days to order).
 async function provisionEsim(senderId, plan, transactionKey) {
   try {
     await msg.sendText(senderId, "Төлбөр хүлээн авлаа ✅ Таны еСИМ-ийг бэлдэж байна...");
@@ -229,6 +251,7 @@ async function provisionEsim(senderId, plan, transactionKey) {
     const orderNo = await esimaccess.orderEsim({
       packageCode: plan.slug,
       transactionId: transactionKey,
+      periodNum: plan.periodNum,
     });
 
     await db.upsertConversation(senderId, { state: "PROVISIONING", order_no: orderNo });
