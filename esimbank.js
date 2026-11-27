@@ -9,6 +9,11 @@
 //    real, unclaimed deposit with the same amount arrived at about the same time.
 //  - If the bank email is late, the order waits and is completed as soon as the deposit arrives.
 //
+// Order kinds stored in bank_orders:
+//   ESIM  — a normal plan from esim_plans (plan_id)
+//   DAILY — a daily plan (2 GB/day, 5 GB/day); details are in `extra`: { code, days, gb, destination }
+//   TOPUP — a data top-up for an existing eSIM (details in `extra`)
+//
 // Everything is stored in your existing Postgres. The tables are created automatically.
 
 const axios = require("axios");
@@ -58,7 +63,8 @@ async function ensureTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
-  // Top-up support: an order is either a new eSIM (plan_id) or a data top-up (extra).
+  // Top-up / daily-plan support: an order is either a new eSIM (plan_id), a daily plan
+  // or a data top-up (details in `extra`).
   await db.pool.query(`ALTER TABLE bank_orders ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'ESIM'`);
   await db.pool.query(`ALTER TABLE bank_orders ADD COLUMN IF NOT EXISTS extra JSONB`);
   await db.pool.query(`ALTER TABLE bank_orders ALTER COLUMN plan_id DROP NOT NULL`);
@@ -96,6 +102,22 @@ function createBankOrder(senderId, plan) {
     kind: "ESIM",
     planId: plan.id,
     amount: Math.round(Number(plan.price_mnt)),
+  });
+}
+
+// Daily plan purchase (2 GB/day or 5 GB/day, customer-chosen number of days).
+// dailyInfo = { amountMnt, code, days, gb, destination }
+function createBankDailyOrder(senderId, dailyInfo) {
+  return insertOrder(senderId, {
+    kind: "DAILY",
+    planId: null,
+    amount: Math.round(Number(dailyInfo.amountMnt)),
+    extra: {
+      code: dailyInfo.code,
+      days: Number(dailyInfo.days),
+      gb: dailyInfo.gb,
+      destination: dailyInfo.destination,
+    },
   });
 }
 
@@ -259,6 +281,21 @@ async function tryResolve(code) {
     if (order.kind === "TOPUP") {
       await msg.sendText(order.sender_id, "Төлбөр хүлээн авлаа ✅ Дата нэмж байна...");
       await topup({ sender_id: order.sender_id, ...order.extra }, `topup_bank_${order.code}_${Date.now()}`);
+    } else if (order.kind === "DAILY") {
+      // Daily plan: build a plan object the same shape provisionEsim expects,
+      // plus periodNum = the number of days the customer chose.
+      const x = order.extra || {};
+      if (!x.code || !x.days) throw new Error(`daily order ${order.code} has no plan details`);
+      const plan = {
+        id: null,
+        slug: x.code,
+        destination: x.destination,
+        gb: x.gb,
+        duration_days: Number(x.days),
+        price_mnt: Number(order.amount),
+        periodNum: Number(x.days),
+      };
+      await provision(order.sender_id, plan, `beez_bank_${order.code}`);
     } else {
       const plan = await db.getPlanById(order.plan_id);
       if (!plan) throw new Error(`plan ${order.plan_id} not found`);
@@ -386,4 +423,12 @@ async function onDeposit({ id, amount, receivedAt }) {
   }
 }
 
-module.exports = { init, createBankOrder, createBankTopupOrder, handleScreenshot, onDeposit, seenBefore };
+module.exports = {
+  init,
+  createBankOrder,
+  createBankDailyOrder,
+  createBankTopupOrder,
+  handleScreenshot,
+  onDeposit,
+  seenBefore,
+};
