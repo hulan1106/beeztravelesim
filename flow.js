@@ -105,6 +105,9 @@ const GREETING_TRIGGERS = [
   "sain baina uu", "ehleh", "эхлэх", "эхлэе", "цэс", "меню", "тусламж",
 ];
 
+// Clears the remembered daily-plan choice. Spread into upsertConversation calls.
+const CLEAR_DAILY = { daily_code: null, daily_days: null, daily_price_mnt: null };
+
 function isGreeting(text) {
   const t = (text || "").trim().toLowerCase().replace(/[!?.,]+$/g, "").trim();
   return GREETING_TRIGGERS.includes(t);
@@ -131,10 +134,9 @@ function matchDestination(text) {
 
 // Asks the customer which country they're travelling to.
 async function askCountry(senderId) {
-  const countries = Object.values(DISPLAY_NAMES).join(", ");
   await msg.sendText(
     senderId,
-    `Та аль улс руу явах вэ? 🌍\nУлсын нэрийг бичнэ үү (жишээ нь: Хятад, Солонгос, Япон).}`
+    `Та аль улс руу явах вэ? 🌍\nУлсын нэрийг бичнэ үү (жишээ нь: Хятад, Солонгос, Япон).`
   );
 }
 
@@ -170,6 +172,7 @@ async function handleMessage(senderId, text, payload) {
       invoice_number: null,
       order_no: null,
       iccid: null,
+      ...CLEAR_DAILY,
     });
     const destinations = Object.values(DISPLAY_NAMES).join(", ");
     await msg.sendText(
@@ -215,6 +218,19 @@ async function handleMessage(senderId, text, payload) {
     return handlePlanChosen(senderId, Number(payload.split("|")[1]));
   }
 
+  // Daily plans (2 GB/day, 5 GB/day): chosen plan, then how to pay.
+  if (payload && payload.startsWith("DAILY|")) {
+    return handleDailyChosen(senderId, payload);
+  }
+
+  if (payload === "PAYD_QPAY") {
+    return handlePayQpayDaily(senderId);
+  }
+
+  if (payload === "PAYD_BANK") {
+    return handlePayBankDaily(senderId);
+  }
+
   if (payload && payload.startsWith("TOPUPQPAY|")) {
     return handleTopupQpay(senderId, payload);
   }
@@ -244,7 +260,7 @@ async function handleMessage(senderId, text, payload) {
   // picks) falls through to the state-specific handlers below.
   const destination = matchDestination(text);
   if (destination) {
-    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination });
+    await db.upsertConversation(senderId, { state: "AWAITING_DAYS", destination, ...CLEAR_DAILY });
     await msg.sendText(
       senderId,
       `${DISPLAY_NAMES[destination]} руу хэдэн хоног явах вэ? Тоогоор бичнэ үү (жишээ нь: 7)`
@@ -285,6 +301,45 @@ async function handleMessage(senderId, text, payload) {
   return false; // not part of this flow
 }
 
+// --- PLAN BUTTONS (normal plans + daily plans) ---
+// Quick-reply titles must stay under 20 characters and Messenger allows at
+// most 13 quick replies. Daily buttons look like "2GB/өдөр 44,000₮".
+const MAX_QUICK_REPLIES = 13;
+
+function dailyPlansFor(destination, days) {
+  if (!days || days > esimaccess.DAILY_MAX_DAYS) return [];
+  return esimaccess.getDailyPlans(destination);
+}
+
+function buildPlanButtons(plans, destination, days) {
+  const daily = dailyPlansFor(destination, days);
+  const normal = plans
+    .slice(0, MAX_QUICK_REPLIES - daily.length)
+    .map((p) => ({
+      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
+      payload: `PLAN|${p.id}`,
+    }));
+  const dailyButtons = daily.map((d) => ({
+    title: `${d.gb}GB/өдөр ${esimaccess.dailyTotalMnt(d.perDayMnt, days).toLocaleString()}₮`,
+    payload: `DAILY|${d.code}|${days}`,
+  }));
+  return normal.concat(dailyButtons);
+}
+
+function planPrompt(intro, destination, days) {
+  const daily = dailyPlansFor(destination, days);
+  if (!daily.length) return intro;
+  const speeds = daily.map((d) => d.fupKbps);
+  const lo = Math.min(...speeds);
+  const hi = Math.max(...speeds);
+  const speedText = lo === hi ? `${lo} Kbps` : `${lo}–${hi} Kbps`;
+  return (
+    `${intro}\n\n` +
+    `📅 "/өдөр" багц: өдөр бүр 2 эсвэл 5 GB. Өдрийн дата дууссаны дараа холболт тасрахгүй, хурд ${speedText} болж үргэлжилнэ. ` +
+    `Үнэ ${days} хоногоор бодогдсон.`
+  );
+}
+
 async function handleDaysReply(senderId, convo, text) {
   const days = parseInt((text || "").trim(), 10);
   if (!Number.isInteger(days) || days <= 0) {
@@ -293,62 +348,69 @@ async function handleDaysReply(senderId, convo, text) {
   }
 
   const available = await db.getAvailableDurations(convo.destination);
-  if (available.length === 0) {
+  const dailyAvailable = dailyPlansFor(convo.destination, days).length > 0;
+  if (available.length === 0 && !dailyAvailable) {
     await msg.sendText(senderId, "Уучлаарай, энэ чиглэлд одоогоор багц алга байна.");
     return true;
   }
 
-  let plans;
-  let matchedDuration;
+  let plans = [];
+  let matchedDuration = null;
 
-  if (days <= 2) {
-    // For short trips, query all durations and filter to 3/5/10 GB options only.
-    // This lets short-trip customers see lightweight plans even though the DB
-    // stores them under longer duration tiers (e.g. 7-day bucket).
-    const SHORT_TRIP_GB = [1, 3, 5, 10];
-    const allPlans = (
-      await Promise.all(
-        available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
-      )
-    ).flat();
+  if (available.length > 0) {
+    if (days <= 2) {
+      // For short trips, query all durations and filter to 3/5/10 GB options only.
+      // This lets short-trip customers see lightweight plans even though the DB
+      // stores them under longer duration tiers (e.g. 7-day bucket).
+      const SHORT_TRIP_GB = [1, 3, 5, 10];
+      const allPlans = (
+        await Promise.all(
+          available.map((d) => db.getPlansForCountryAndDuration(convo.destination, d))
+        )
+      ).flat();
 
-    // Deduplicate by GB size — keep the cheapest plan per GB tier.
-    const byGb = new Map();
-    for (const p of allPlans) {
-      const gb = Number(p.gb);
-      if (!SHORT_TRIP_GB.includes(gb)) continue;
-      if (!byGb.has(gb) || Number(p.price_mnt) < Number(byGb.get(gb).price_mnt)) {
-        byGb.set(gb, p);
+      // Deduplicate by GB size — keep the cheapest plan per GB tier.
+      const byGb = new Map();
+      for (const p of allPlans) {
+        const gb = Number(p.gb);
+        if (!SHORT_TRIP_GB.includes(gb)) continue;
+        if (!byGb.has(gb) || Number(p.price_mnt) < Number(byGb.get(gb).price_mnt)) {
+          byGb.set(gb, p);
+        }
       }
-    }
 
-    plans = SHORT_TRIP_GB.map((gb) => byGb.get(gb)).filter(Boolean);
+      plans = SHORT_TRIP_GB.map((gb) => byGb.get(gb)).filter(Boolean);
 
-    if (plans.length === 0) {
-      // Fall back to smallest duration if none of 3/5/10 GB exist for this destination.
-      matchedDuration = available[0];
-      plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+      if (plans.length === 0) {
+        // Fall back to smallest duration if none of 3/5/10 GB exist for this destination.
+        matchedDuration = available[0];
+        plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
+      } else {
+        // Use the duration of the first matched plan so AWAITING_PLAN state is consistent.
+        matchedDuration = plans[0].duration_days;
+      }
     } else {
-      // Use the duration of the first matched plan so AWAITING_PLAN state is consistent.
-      matchedDuration = plans[0].duration_days;
+      // >2 days: target 30-day tier, or largest available.
+      const preferredUpsell = available.includes(30)
+        ? 30
+        : available[available.length - 1];
+      matchedDuration = preferredUpsell;
+      plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
     }
-  } else {
-    // >2 days: target 30-day tier, or largest available.
-    const preferredUpsell = available.includes(30)
-      ? 30
-      : available[available.length - 1];
-    matchedDuration = preferredUpsell;
-    plans = await db.getPlansForCountryAndDuration(convo.destination, matchedDuration);
   }
 
-  await db.upsertConversation(senderId, { state: "AWAITING_PLAN", duration_days: matchedDuration });
+  // Remember the typed days (daily plans are priced by them) and clear any old daily choice.
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_PLAN",
+    duration_days: matchedDuration,
+    daily_code: null,
+    daily_days: days,
+    daily_price_mnt: null,
+  });
   await msg.sendQuickReplies(
     senderId,
-    "Дата хэмжээгээ сонгоно уу:",
-    plans.map((p) => ({
-      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
-      payload: `PLAN|${p.id}`,
-    }))
+    planPrompt("Дата хэмжээгээ сонгоно уу:", convo.destination, days),
+    buildPlanButtons(plans, convo.destination, days)
   );
   return true;
 }
@@ -358,9 +420,11 @@ async function handleDaysReply(senderId, convo, text) {
 // destination + duration, and proceed exactly as if they'd tapped it.
 async function handlePlanTextReply(senderId, convo, text) {
   const typedGb = parseFloat((text || "").replace(",", ".").match(/[\d.]+/)?.[0] || "");
+  const plans = convo.duration_days
+    ? await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days)
+    : [];
 
   if (!Number.isNaN(typedGb)) {
-    const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
     const match = plans.find((p) => Number(p.gb) === typedGb);
     if (match) {
       return handlePlanChosen(senderId, match.id);
@@ -368,14 +432,10 @@ async function handlePlanTextReply(senderId, convo, text) {
   }
 
   // No match — remind them to tap a button instead of guessing silently.
-  const plans = await db.getPlansForCountryAndDuration(convo.destination, convo.duration_days);
   await msg.sendQuickReplies(
     senderId,
-    "Уучлаарай, дээрх сонголтуудаас сонгоно уу:",
-    plans.map((p) => ({
-      title: `${p.gb} GB - ${Number(p.price_mnt).toLocaleString()}₮`,
-      payload: `PLAN|${p.id}`,
-    }))
+    planPrompt("Уучлаарай, дээрх сонголтуудаас сонгоно уу:", convo.destination, convo.daily_days),
+    buildPlanButtons(plans, convo.destination, convo.daily_days)
   );
   return true;
 }
@@ -394,6 +454,7 @@ async function handlePlanChosen(senderId, planId) {
     plan_id: plan.id,
     invoice_id: null,
     invoice_number: null,
+    ...CLEAR_DAILY,
   });
 
   await msg.sendButtons(
@@ -425,6 +486,7 @@ async function handlePayQpay(senderId, planId) {
     plan_id: plan.id,
     invoice_id: String(invoice.id),
     invoice_number: invoice.number,
+    ...CLEAR_DAILY,
   });
 
   await msg.sendButton(
@@ -464,6 +526,132 @@ async function handlePayBank(senderId, planId) {
       `Данс: 416075929\n` +
       `IBAN: MN270004000416075929\n` +
       `Дүн: ${Number(plan.price_mnt).toLocaleString()}₮\n` +
+      `Гүйлгээний утга: ${bankCode}\n\n` +
+      `Гүйлгээний утга дээр ${bankCode} кодыг заавал бичнэ үү. Шилжүүлсний дараа ГҮЙЛГЭЭ АМЖИЛТТАЙ баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц еСИМ автоматаар ирнэ.`
+  );
+  return true;
+}
+
+// --- DAILY PLANS (2 GB/day, 5 GB/day) ---
+// The price is always recomputed here from the trusted DAILY_PLANS table in
+// esimaccess.js (never taken from the button text), so it cannot be tampered with.
+
+// Customer tapped a daily-plan button: payload = DAILY|<packageCode>|<days>.
+async function handleDailyChosen(senderId, payload) {
+  const [, code, daysStr] = payload.split("|");
+  const days = parseInt(daysStr, 10);
+  const daily = esimaccess.getDailyPlanByCode(code);
+
+  if (!daily || !Number.isInteger(days) || days < 1 || days > esimaccess.DAILY_MAX_DAYS) {
+    await msg.sendText(senderId, "Уучлаарай, энэ багц олдсонгүй. Дахин оролдоно уу.");
+    return true;
+  }
+
+  const total = esimaccess.dailyTotalMnt(daily.perDayMnt, days);
+
+  // No invoice and no bank code yet — created only for the payment method chosen.
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_PAYMENT",
+    destination: daily.destination,
+    plan_id: null,
+    invoice_id: null,
+    invoice_number: null,
+    daily_code: daily.code,
+    daily_days: days,
+    daily_price_mnt: total,
+  });
+
+  await msg.sendButtons(
+    senderId,
+    `${DISPLAY_NAMES[daily.destination] || daily.destination} — өдөр бүр ${daily.gb} GB × ${days} хоног = ${total.toLocaleString()}₮.\n` +
+      `Өдрийн дата дууссаны дараа хурд ${daily.fupKbps} Kbps болж үргэлжилнэ. Хоног анхны холболтоос эхэлнэ.\n\n` +
+      `Хэрхэн төлөх вэ?`,
+    [
+      { title: "QPAY төлөх", payload: "PAYD_QPAY" },
+      { title: "Дансаар шилжүүлэх", payload: "PAYD_BANK" },
+    ]
+  );
+  return true;
+}
+
+// Reads the customer's remembered daily choice and recomputes the price.
+// Returns { daily, days, total } or null if nothing valid is remembered.
+async function getDailyOrder(senderId) {
+  const convo = await db.getConversation(senderId);
+  if (!convo?.daily_code || !convo.daily_days) return null;
+  const daily = esimaccess.getDailyPlanByCode(convo.daily_code);
+  const days = Number(convo.daily_days);
+  if (!daily || !Number.isInteger(days) || days < 1 || days > esimaccess.DAILY_MAX_DAYS) return null;
+  return { daily, days, total: esimaccess.dailyTotalMnt(daily.perDayMnt, days) };
+}
+
+async function handlePayQpayDaily(senderId) {
+  const order = await getDailyOrder(senderId);
+  if (!order) {
+    await msg.sendText(senderId, "Уучлаарай, багц олдсонгүй. «дахин эхлэх» гэж бичээд дахин оролдоно уу.");
+    return true;
+  }
+  const { daily, days, total } = order;
+
+  const invoice = await byl.createInvoice(
+    total,
+    `Beez eSIM ${DISPLAY_NAMES[daily.destination] || daily.destination} ${daily.gb}GB/өдөр x ${days} хоног`
+  );
+
+  await db.upsertConversation(senderId, {
+    state: "AWAITING_PAYMENT",
+    destination: daily.destination,
+    plan_id: null,
+    invoice_id: String(invoice.id),
+    invoice_number: invoice.number,
+    daily_code: daily.code,
+    daily_days: days,
+    daily_price_mnt: total,
+  });
+
+  await msg.sendButton(
+    senderId,
+    `${daily.gb} GB/өдөр × ${days} хоног — ${total.toLocaleString()}₮. Төлбөрөө төлж есимээ шууд аваарай:`,
+    invoice.url,
+    "QPAY төлөх"
+  );
+
+  await msg.sendText(
+    senderId,
+    `Хэрэв дээрх товч ажиллахгүй бол энэ холбоос дээр удаан дараад "Нээх Safari-аар" сонголтыг хийнэ үү:\n${invoice.url}`
+  );
+
+  // Bottom button: for customers whose QPAY did not work.
+  await msg.sendQuickReplies(senderId, "QPAY ажиллахгүй байна уу?", [
+    { title: "Дансаар шилжүүлэх", payload: "PAYD_BANK" },
+  ]);
+  return true;
+}
+
+async function handlePayBankDaily(senderId) {
+  const order = await getDailyOrder(senderId);
+  if (!order) {
+    await msg.sendText(senderId, "Уучлаарай, багц олдсонгүй. «дахин эхлэх» гэж бичээд дахин оролдоно уу.");
+    return true;
+  }
+  const { daily, days, total } = order;
+
+  const bankCode = await bank.createBankDailyOrder(senderId, {
+    amountMnt: total,
+    code: daily.code,
+    days,
+    gb: daily.gb,
+    destination: daily.destination,
+  });
+
+  await msg.sendText(
+    senderId,
+    `Дансаар шилжүүлэх (${daily.gb} GB/өдөр × ${days} хоног):\n` +
+      `Банк: Худалдаа хөгжлийн банк\n` +
+      `Нэр: Хулан\n` +
+      `Данс: 416075929\n` +
+      `IBAN: MN270004000416075929\n` +
+      `Дүн: ${total.toLocaleString()}₮\n` +
       `Гүйлгээний утга: ${bankCode}\n\n` +
       `Гүйлгээний утга дээр ${bankCode} кодыг заавал бичнэ үү. Шилжүүлсний дараа ГҮЙЛГЭЭ АМЖИЛТТАЙ баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц еСИМ автоматаар ирнэ.`
   );
