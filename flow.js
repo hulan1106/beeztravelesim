@@ -564,7 +564,7 @@ async function handleDailyChosen(senderId, payload) {
   await msg.sendButtons(
     senderId,
     `${DISPLAY_NAMES[daily.destination] || daily.destination} — өдөр бүр ${daily.gb} GB × ${days} хоног = ${total.toLocaleString()}₮.\n` +
-      `Өдрийн дата дууссаны дараа хурд ${daily.fupKbps} Kbps болж үргэлжилнэ. Хоног анхны холболтоос эхэлнэ.\n\n` +
+      `Өдрийн дата дууссаны дараа хурд ${daily.fupKbps} Kbps болж үргэлжилнэ.\n\n` +
       `Хэрхэн төлөх вэ?`,
     [
       { title: "QPAY төлөх", payload: "PAYD_QPAY" },
@@ -665,7 +665,7 @@ async function handleUsageOrderReply(senderId, text) {
   if (!/^[A-Z]\d{8,}$/.test(orderNo)) {
     await sendMainMenu(
       senderId,
-      "Захиалгын дугаар таарсангүй 😕 Дугаараа дахин бичнэ үү (жишээ нь: B26020700440027), эсвэл доороос сонгоно уу:"
+      "Захиалгын дугаар таарсангүй 😕 Дугаараа дахин бичнэ үү (жишээ нь: B26*********), эсвэл доороос сонгоно уу:"
     );
     return true;
   }
@@ -729,7 +729,7 @@ async function handleTopupYes(senderId, convo) {
   if (!packages.length) {
     await msg.sendText(
       senderId,
-      "Уучлаарай, энэ eSIM-д одоогоор дата нэмэх боломжгүй байна. Манай тусламжийн багтай холбогдоно уу."
+      "Уучлаарай, энэ eSIM-д одоогоор дата нэмэх боломжгүй байна. Манай харилцагч үйлчилгээний багтай холбогдоно уу."
     );
     return true;
   }
@@ -853,7 +853,7 @@ async function handleTopupBank(senderId, payload) {
       `IBAN: MN270004000416075929\n` +
       `Дүн: ${info.priceMnt.toLocaleString()}₮\n` +
       `Гүйлгээний утга: ${bankCode}\n\n` +
-      `Гүйлгээний утга дээр ${bankCode} кодыг заавал бичнэ үү. Шилжүүлсний дараа гүйлгээний баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц дата автоматаар нэмэгдэнэ.`
+      `Гүйлгээний утга дээр ${bankCode} кодыг заавал бичнэ үү. Шилжүүлсний дараа ГҮЙЛГЭЭ АМЖИЛТТАЙ баримтын зургийг (screenshot) энд илгээнэ үү. Төлбөр баталгаажмагц дата автоматаар нэмэгдэнэ.`
   );
   return true;
 }
